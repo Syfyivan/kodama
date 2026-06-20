@@ -1,3 +1,12 @@
+> ## ⚠️ 本仓库已归档（Archived）
+>
+> Kodama 已迁入 monorepo，与配套的 `lark-codex-bridge` 桥接器同仓维护：
+> **👉 [github.com/Syfyivan/lark-codex-bridge](https://github.com/Syfyivan/lark-codex-bridge)（见 `packages/kodama`）**
+>
+> 本仓库停止更新，仅作历史存档。最新代码、Issue、PR 请移步上面的 monorepo。
+
+---
+
 # 🌳 Kodama
 
 住在你代码里的 Live2D 小精灵。当 **Claude Code / Codex** 跑完任务或需要你介入时，它会做动作 + 冒泡提醒你。
