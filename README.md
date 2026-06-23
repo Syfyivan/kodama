@@ -1,13 +1,14 @@
-> ## ⚠️ 本仓库已归档（Archived）
->
-> Kodama 已迁入 monorepo，与配套的 `lark-codex-bridge` 桥接器同仓维护：
-> **👉 [github.com/Syfyivan/lark-codex-bridge](https://github.com/Syfyivan/lark-codex-bridge)（见 `packages/kodama`）**
->
-> 本仓库停止更新，仅作历史存档。最新代码、Issue、PR 请移步上面的 monorepo。
-
----
-
 # 🌳 Kodama
+
+独立分享用的桌宠仓库。
+
+这份仓库可以单独给别人使用，不要求对方必须采用 `lark-codex-bridge`；它有三种落地方式：
+
+- 只接本地 Claude Code / Codex hooks，当作纯本地桌宠用
+- 直接接 `lark-codex-bridge`，开箱即用
+- 接任意一个**兼容 Kodama bridge 协议**的本地适配层
+
+如果对方的桥接器不是你的这套实现，关键不在“是不是同一个仓库”，而在“能不能暴露出 Kodama 认识的本地接口”。最小兼容面见 [docs/bridge-compatibility.md](./docs/bridge-compatibility.md)。
 
 住在你代码里的 Live2D 小精灵。当 **Claude Code / Codex** 跑完任务或需要你介入时，它会做动作 + 冒泡提醒你。
 
@@ -36,7 +37,7 @@ pnpm start
 - 支持声音/系统通知独立开关；重要事件默认有系统通知和短提示音
 - 事件面板用 tab 分区，顶部「待交互 / 已完成 / 事件」数字可直接切到对应列表
 - 事件面板和菜单栏都有 **Bridge 任务详情**入口：读取 bridge `/task-viewer/tasks.json`，显示任务列表、prompt、最终回复、错误、token、cwd、飞书 chat/message 和完整公开进度时间线
-- 拖动桌宠时会限制在当前屏幕 workArea 内，避免宠物或气泡完全跑出屏幕
+- 支持跨显示器拖动；仍会保证桌宠至少部分可见，不会完全丢出所有屏幕
 - **菜单栏 Kodama** → 显示/隐藏、事件 / 配置面板、Bridge 任务详情、勿扰、开机自启、番茄钟、大小、配饰、退出；找不到菜单栏入口时可按 `⌘⌥K` 显示/隐藏、`⌘⌥P` 打开面板，或在本仓库运行 `pnpm run show`
 
 > 渲染栈（PixiJS / pixi-live2d-display / Cubism Core）和示例模型由 `pnpm run setup` 下载到本地 `src/renderer/vendor`、`src/renderer/models`（已 gitignore：Cubism Core 与官方模型受再分发限制，故按需下载而非提交）。下载后运行时**完全离线**。
@@ -73,6 +74,8 @@ PET_SYNC_MODE=safe         # safe=脱敏+截断摘要(默认推荐)；full=本�
 桌宠启动后自动连 `http://127.0.0.1:8787/pet/events`，bridge 没开也不影响桌宠独立运行（EventSource 会自动重连）。事件→反应映射在 `src/renderer/agent-sync.js`。
 
 > bridge 改了端口或地址？`cp src/renderer/config/agent.local.example.js src/renderer/config/agent.local.js`，在里面写 `bridgeUrl`（和可选 `token`）。该文件 gitignore。
+>
+> bridge 不是 `lark-codex-bridge` 也没关系，只要它在本机 loopback 上兼容 Kodama 的接口层即可。协议说明见 [docs/bridge-compatibility.md](./docs/bridge-compatibility.md)。
 
 **事件类型**：`lark_message_received`（看手机）/ `task_started`（开工）/ `task_progress`（进度）/ `lark_reply_sent`（回复摘要）/ `task_waiting`（待交互）/ `agent_done`（子 Agent 完成）/ `task_done`（撒花）/ `task_failed`（报错）。
 

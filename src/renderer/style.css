@@ -8,6 +8,14 @@ body {
   background: transparent; /* required for the transparent window */
 }
 
+body.move-mode {
+  cursor: grab;
+}
+
+body.move-mode:active {
+  cursor: grabbing;
+}
+
 :root {
   --pet-scale: 0.72;
   --pet-opacity: 0.82;
@@ -145,7 +153,7 @@ body {
   font: 12px/1.35 -apple-system, "PingFang SC", system-ui, sans-serif;
   pointer-events: auto;
   transition: opacity 0.25s ease;
-  max-height: calc(100vh - 20px);
+  max-height: min(56vh, 420px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -253,6 +261,12 @@ body {
   color: #5c6c82;
   cursor: pointer;
   font: 11px/1 -apple-system, "PingFang SC", system-ui, sans-serif;
+}
+
+.bubble-head button:disabled,
+.bubble-stack-tools button:disabled {
+  opacity: 0.62;
+  cursor: progress;
 }
 
 .bubble-text {
@@ -395,6 +409,12 @@ body {
 .bridge-panel-tools button:hover {
   background: #eef5ff;
   color: #23549a;
+}
+
+.panel-actions button:disabled,
+.bridge-panel-tools button:disabled {
+  opacity: 0.62;
+  cursor: progress;
 }
 
 .panel-metrics {
@@ -700,6 +720,12 @@ body {
   gap: 6px;
 }
 
+.settings-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
 .window-size-buttons button,
 .config-buttons button {
   height: 28px;
@@ -726,6 +752,12 @@ body {
 .config-buttons button:hover {
   background: #eef5ff;
   color: #23549a;
+}
+
+.settings-action.active {
+  background: #e8f1ff;
+  color: #23549a;
+  border-color: rgba(56, 105, 190, 0.36);
 }
 
 .config-list {

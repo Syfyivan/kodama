@@ -6,6 +6,11 @@ const { spawn } = require('child_process')
 const tokenUsage = require('./token-usage')
 const { createPomodoro } = require('./pomodoro')
 const { mapHookToEvent } = require('./hook-events')
+const {
+  bridgeTasks: loadBridgeTasks,
+  shareBridgeTasks: createBridgeTasksShare,
+  shareSession: createSessionShare,
+} = require('./bridge-client')
 
 let win
 let taskWin
@@ -148,6 +153,11 @@ function setPetHidden(hidden) {
 function showPetAndMaybeTogglePanel(togglePanel = false) {
   setPetHidden(false)
   if (togglePanel) setTimeout(() => sendToPet('pet:toggle-panel'), 80)
+}
+
+function showPetAndEnterMoveMode() {
+  setPetHidden(false)
+  setTimeout(() => sendToPet('pet:enter-move-mode'), 80)
 }
 
 function notifyHiddenControls() {
@@ -747,158 +757,20 @@ ipcMain.handle('pet:session-preview', async (_e, request) => {
   }
 })
 
-function bridgeTokenFromDisk() {
-  const envToken = String(process.env.KODAMA_BRIDGE_TOKEN || '').trim()
-  if (envToken) return envToken
-  const candidates = [
-    path.join(app.getPath('home'), '.lark-codex-bridge-http-token'),
-  ]
-  for (const candidate of candidates) {
-    if (!candidate) continue
-    try {
-      const value = fs.readFileSync(candidate, 'utf8').trim()
-      if (value) return value
-    } catch {
-      /* optional token file */
-    }
-  }
-  return ''
-}
-
-function normalizeBridgeBaseUrl(value) {
-  const parsed = new URL(String(value || 'http://127.0.0.1:8787'))
-  const hostname = parsed.hostname.toLowerCase()
-  if (!['127.0.0.1', 'localhost', '::1', '[::1]'].includes(hostname)) {
-    throw new Error('bridge URL must be loopback')
-  }
-  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported bridge protocol')
-  return `${parsed.protocol}//${parsed.host}`
-}
-
-async function requestBridgeJson(baseUrl, pathName, { method = 'GET', body = null, token = '', timeoutMs = 30000 } = {}) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const headers = {}
-    if (token) headers.Authorization = `Bearer ${token}`
-    if (body != null) headers['Content-Type'] = 'application/json'
-    const res = await fetch(`${baseUrl}${pathName}`, {
-      method,
-      headers,
-      body: body == null ? undefined : JSON.stringify(body),
-      signal: controller.signal,
-    })
-    const text = await res.text()
-    let json = {}
-    try {
-      json = JSON.parse(text || '{}')
-    } catch {
-      json = { error: text || `HTTP ${res.status}` }
-    }
-    if (!res.ok) return { ok: false, status: res.status, error: json.error || `HTTP ${res.status}`, raw: json }
-    return json
-  } catch (err) {
-    if (err?.name === 'AbortError') return { ok: false, error: 'bridge request timed out' }
-    return { ok: false, error: err?.message || String(err) }
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function postBridgeJson(baseUrl, pathName, body, token) {
-  return requestBridgeJson(baseUrl, pathName, {
-    method: 'POST',
-    body,
-    token,
-    timeoutMs: 180000,
-  })
-}
-
 ipcMain.handle('pet:share-session', async (_e, request) => {
-  try {
-    const provider = request?.provider === 'claude' ? 'claude' : 'codex'
-    const sessionId = String(request?.sessionId || request?.threadId || '').trim()
-    if (!sessionId) return { ok: false, error: 'missing-session-id' }
-    const baseUrl = normalizeBridgeBaseUrl(request?.bridgeUrl)
-    const token = String(request?.token || '').trim() || bridgeTokenFromDisk()
-    const result = await postBridgeJson(baseUrl, '/v1/sessions/session-shares', {
-      provider,
-      session_id: sessionId,
-    }, token)
-    if (!result?.ok) return result || { ok: false, error: 'bridge-share-failed' }
-    const url = result.share?.url || result.doc?.url || result.url || ''
-    if (!url) return { ok: false, error: 'bridge did not return a share URL', raw: result }
-    clipboard.writeText(url)
-    return { ...result, url, copied: true }
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err) }
-  }
+  const result = await createSessionShare(request, { homeDir: app.getPath('home') })
+  if (result?.ok && result.url) clipboard.writeText(result.url)
+  return result?.ok ? { ...result, copied: Boolean(result.url) } : result
 })
 
-function normalizeBridgeTaskLimit(value) {
-  return clampInt(value, 1, 200, 50)
-}
-
-function normalizeBridgeTaskScope(request = {}) {
-  const source = request || {}
-  const scope = {}
-  const taskId = String(source.taskId || source.task_id || '').trim()
-  const contextKey = String(source.contextKey || source.context_key || '').trim()
-  const chatId = String(source.chatId || source.chat_id || '').trim()
-  const messageId = String(source.messageId || source.message_id || '').trim()
-  if (taskId) scope.task_id = taskId
-  if (contextKey) scope.context_key = contextKey
-  if (chatId) scope.chat_id = chatId
-  if (messageId) scope.message_id = messageId
-  return scope
-}
-
-function bridgeTaskQueryPath(limit, scope = {}) {
-  const params = new URLSearchParams({ limit: String(limit) })
-  Object.entries(scope).forEach(([key, value]) => {
-    if (value) params.set(key, value)
-  })
-  return `/task-viewer/tasks.json?${params.toString()}`
-}
-
 ipcMain.handle('pet:bridge-tasks', async (_e, request) => {
-  try {
-    const baseUrl = normalizeBridgeBaseUrl(request?.bridgeUrl)
-    const token = String(request?.token || '').trim() || bridgeTokenFromDisk()
-    const limit = normalizeBridgeTaskLimit(request?.limit)
-    const scope = normalizeBridgeTaskScope(request)
-    const result = await requestBridgeJson(baseUrl, bridgeTaskQueryPath(limit, scope), {
-      token,
-      timeoutMs: 15000,
-    })
-    if (!result?.ok) return result || { ok: false, error: 'bridge task viewer request failed' }
-    const tasks = Array.isArray(result.tasks) ? result.tasks : []
-    return {
-      ok: true,
-      bridgeUrl: baseUrl,
-      updatedAt: new Date().toISOString(),
-      tasks,
-      scope: result.scope || scope,
-    }
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err) }
-  }
+  return loadBridgeTasks(request, { homeDir: app.getPath('home') })
 })
 
 ipcMain.handle('pet:share-bridge-tasks', async (_e, request) => {
-  try {
-    const baseUrl = normalizeBridgeBaseUrl(request?.bridgeUrl)
-    const token = String(request?.token || '').trim() || bridgeTokenFromDisk()
-    const limit = normalizeBridgeTaskLimit(request?.limit)
-    const scope = normalizeBridgeTaskScope(request)
-    const result = await postBridgeJson(baseUrl, '/v1/bridge/task-viewer/share', { limit, ...scope }, token)
-    if (!result?.ok) return result || { ok: false, error: 'bridge task viewer share failed' }
-    const url = result.url || result.share?.url || result.doc?.url || ''
-    if (url) clipboard.writeText(url)
-    return { ...result, url, copied: Boolean(url) }
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err) }
-  }
+  const result = await createBridgeTasksShare(request, { homeDir: app.getPath('home') })
+  if (result?.ok && result.url) clipboard.writeText(result.url)
+  return result?.ok ? { ...result, copied: Boolean(result.url) } : result
 })
 
 ipcMain.handle('pet:open-bridge-tasks-window', () => {
@@ -1390,6 +1262,7 @@ function refreshTray() {
     click: () => setPetHidden(!petHidden),
   })
   items.push({ label: '事件 / 配置面板  ⌘⌥P', click: () => showPetAndMaybeTogglePanel(true) })
+  items.push({ label: '移动桌宠  ⌘⌥M', click: () => showPetAndEnterMoveMode() })
   items.push({ label: 'Bridge 任务详情', click: () => createBridgeTasksWindow() })
   items.push({
     label: petUiMenuState.dndMode ? '退出勿扰模式' : '进入勿扰模式',
@@ -1443,6 +1316,7 @@ function registerGlobalShortcuts() {
   const shortcuts = [
     ['CommandOrControl+Option+K', () => setPetHidden(!petHidden)],
     ['CommandOrControl+Option+P', () => showPetAndMaybeTogglePanel(true)],
+    ['CommandOrControl+Option+M', () => showPetAndEnterMoveMode()],
   ]
   shortcuts.forEach(([accelerator, handler]) => {
     if (!globalShortcut.register(accelerator, handler)) {

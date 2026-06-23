@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('pet', {
   getPomodoroSettings: () => ipcRenderer.invoke('pet:pomodoro-settings'),
   updatePomodoroSettings: (settings) => ipcRenderer.send('pet:pomodoro-settings', settings),
   onTogglePanel: (cb) => ipcRenderer.on('pet:toggle-panel', () => cb()),
+  onEnterMoveMode: (cb) => ipcRenderer.on('pet:enter-move-mode', () => cb()),
   updateUiMenuState: (state) => ipcRenderer.send('pet:ui-menu-state', state),
   onSetDndMode: (cb) => ipcRenderer.on('pet:set-dnd-mode', (_e, enabled) => cb(enabled)),
   // accessory tray menu state and commands

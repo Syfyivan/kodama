@@ -143,6 +143,10 @@ function withAgent(event, data) {
   return agent ? { ...withContext, agent } : withContext
 }
 
+function withSubagent(event, data) {
+  return { ...withAgent(event, data), subagent: true }
+}
+
 function codexNotifyToEvent(data) {
   if (data.type === 'agent-turn-complete') {
     return withLocalContext({ type: 'task_done', source: 'local', text: clampText(data['last-assistant-message']) }, data)
@@ -181,15 +185,15 @@ function mapHookToEvent(data) {
       return withLocalContext({ type: 'task_progress', source: 'local', text: name ? `工具完成：${name}` : '工具调用完成' }, data)
     }
     case 'SubagentStart':
-      return withAgent({ type: 'task_progress', source: 'local', text: agentName(data) ? `子 Agent ${agentName(data)} 开始工作` : '子 Agent 开始工作' }, data)
+      return withSubagent({ type: 'task_progress', source: 'local', text: agentName(data) ? `子 Agent ${agentName(data)} 开始工作` : '子 Agent 开始工作' }, data)
     case 'SubagentStop':
-      return withAgent({ type: 'agent_done', source: 'local', text: agentName(data) ? `子 Agent ${agentName(data)} 完成` : '子 Agent 完成' }, data)
+      return withSubagent({ type: 'agent_done', source: 'local', text: agentName(data) ? `子 Agent ${agentName(data)} 完成` : '子 Agent 完成' }, data)
     case 'TeammateIdle':
-      return withAgent({ type: 'task_waiting', source: 'local', text: agentName(data) ? `${agentName(data)} 等你输入` : 'Agent Team 等你输入' }, data)
+      return withSubagent({ type: 'task_waiting', source: 'local', text: agentName(data) ? `${agentName(data)} 等你输入` : 'Agent Team 等你输入' }, data)
     case 'TaskCreated':
-      return withAgent({ type: 'task_progress', source: 'local', text: agentName(data) ? `${agentName(data)} 开始任务` : 'Agent Team 新任务创建' }, data)
+      return withSubagent({ type: 'task_progress', source: 'local', text: agentName(data) ? `${agentName(data)} 开始任务` : 'Agent Team 新任务创建' }, data)
     case 'TaskCompleted':
-      return withAgent({ type: 'agent_done', source: 'local', text: agentName(data) ? `${agentName(data)} 完成任务` : 'Agent Team 任务完成' }, data)
+      return withSubagent({ type: 'agent_done', source: 'local', text: agentName(data) ? `${agentName(data)} 完成任务` : 'Agent Team 任务完成' }, data)
     case 'Stop':
     case 'SessionEnd':
       return withLocalContext({ type: 'task_done', source: 'local', text: '' }, data)
