@@ -86,7 +86,7 @@ const MAX_PERSISTENT_BUBBLES = 120
 const PANEL_TABS = new Set(['settings', 'waiting', 'done', 'sessions', 'bridge', 'recent', 'config'])
 const BUBBLE_ACTION_DEBOUNCE_MS = 600
 const FLOATING_PADDING = 8
-const BUBBLE_WIDTH = 260
+const BUBBLE_WIDTH = 340
 const PANEL_WIDTH = 310
 let bridgeTasksSharePending = false
 let bridgeTasksState = {
@@ -1598,7 +1598,9 @@ async function openTarget(target) {
   const text = target.kind === 'local-path'
     ? '正在打开本地记录'
     : target.kind === 'terminal-session'
-      ? '正在打开 Agent 终端'
+      ? result.method === 'open cmux app' || result.method === 'cmux focus'
+        ? '正在打开 cmux'
+        : '正在打开 Agent 终端'
       : target.kind === 'codex-thread'
         ? '正在打开 Codex 会话'
         : '正在打开飞书会话'

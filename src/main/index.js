@@ -7,6 +7,13 @@ const tokenUsage = require('./token-usage')
 const { createPomodoro } = require('./pomodoro')
 const { mapHookToEvent } = require('./hook-events')
 const {
+  registerAutoUpdater,
+  checkForUpdates,
+  installDownloadedUpdate,
+  getUpdateStatus,
+  disposeAutoUpdater,
+} = require('./updater')
+const {
   bridgeTasks: loadBridgeTasks,
   shareBridgeTasks: createBridgeTasksShare,
   shareSession: createSessionShare,
@@ -201,6 +208,34 @@ function setLoginItemEnabled(enabled) {
 const WINDOW_STATE_VERSION = 3
 const DEFAULT_WINDOW = { width: 280, height: 400 }
 const windowStateFile = () => path.join(app.getPath('userData'), 'kodama-window.json')
+
+// sessionId -> { tty, surface, workspace, pane, window }, captured while a session
+// is alive so we can still jump to its cmux tab after the agent process exits.
+// We pin cmux's own surface id (not just the tty) because ttys get reused by new
+// panes and several panes can share a cwd.
+const sessionTtyFile = () => path.join(app.getPath('userData'), 'kodama-session-tty.json')
+let sessionTtyCache = new Map()
+let sessionTtySaveTimer = null
+function loadSessionTtyCache() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(sessionTtyFile(), 'utf8'))
+    if (obj && typeof obj === 'object') sessionTtyCache = new Map(Object.entries(obj))
+  } catch { /* first run / corrupt - start empty */ }
+}
+function saveSessionTtyCache() {
+  if (sessionTtySaveTimer) return
+  sessionTtySaveTimer = setTimeout(() => {
+    sessionTtySaveTimer = null
+    try { fs.writeFileSync(sessionTtyFile(), JSON.stringify(Object.fromEntries(sessionTtyCache))) } catch { /* ignore */ }
+  }, 1000)
+}
+function getSessionRecord(id) {
+  const v = sessionTtyCache.get(String(id || '').trim())
+  if (!v) return null
+  if (typeof v === 'string') return { tty: v, surface: '', workspace: '', pane: '', window: '' }
+  return { tty: '', surface: '', workspace: '', pane: '', window: '', ...v }
+}
+
 function clampWindowState(state, workArea) {
   const margin = 8
   const width = Math.min(state.width, Math.max(180, workArea.width - margin * 2))
@@ -473,15 +508,33 @@ function appPathFromCommand(command) {
   return match?.[1] || ''
 }
 
+const isAgentCommand = (command) => /(^|\/|\s)(claude|codex)(\s|$)/i.test(String(command || ''))
+
+async function processCwd(pid) {
+  try {
+    const out = await runCommand('lsof', ['-a', '-d', 'cwd', '-Fn', '-p', String(pid)])
+    const line = out.split('\n').find((l) => l.startsWith('n'))
+    return line ? line.slice(1).trim() : ''
+  } catch {
+    return ''
+  }
+}
+
 async function findCliSessionTarget(target) {
   const sessionId = String(target?.sessionId || '').trim()
-  if (!sessionId) return null
+  const cwd = String(target?.cwd || '').trim()
   const rows = parsePs(await runCommand('ps', ['-axo', 'pid,ppid,pgid,tty,args']))
   const byPid = new Map(rows.map(row => [row.pid, row]))
-  const hit = rows.find((row) => (
-    row.command.includes(sessionId)
-    && /(^|\/|\s)(claude|codex)(\s|$)/i.test(row.command)
-  ))
+  let hit = sessionId
+    ? rows.find((row) => row.command.includes(sessionId) && isAgentCommand(row.command))
+    : null
+
+  if (!hit && cwd) {
+    const agents = rows.filter((row) => isAgentCommand(row.command) && normalizeTty(row.tty))
+    for (const row of agents) {
+      if (await processCwd(row.pid) === cwd) { hit = row; break }
+    }
+  }
   if (!hit) return null
 
   let appPath = ''
@@ -493,6 +546,155 @@ async function findCliSessionTarget(target) {
     cursor = byPid.get(cursor.ppid)
   }
   return { ...hit, appPath }
+}
+
+// ---------- cmux integration ----------
+function cmuxBinPath() {
+  for (const base of ['/Applications', path.join(app.getPath('home'), 'Applications')]) {
+    const p = path.join(base, 'cmux.app', 'Contents', 'Resources', 'bin', 'cmux')
+    if (fs.existsSync(p)) return p
+  }
+  return ''
+}
+
+function cmuxAppPath() {
+  const bin = cmuxBinPath()
+  return bin ? bin.replace(/\/Contents\/.*$/, '') : ''
+}
+
+function bareTty(value) {
+  return String(value || '').replace(/^\/dev\//, '').trim()
+}
+
+function readCmuxState() {
+  const file = path.join(app.getPath('home'), 'Library', 'Application Support', 'cmux', 'session-com.cmuxterm.app.json')
+  try {
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return state && typeof state === 'object' ? state : null
+  } catch {
+    return null
+  }
+}
+
+function findCmuxPanel(rec, target) {
+  const state = readCmuxState()
+  const windows = Array.isArray(state?.windows) ? state.windows : []
+  const targetTty = bareTty(rec?.tty)
+  const targetCwd = String(target?.cwd || '').trim()
+  for (const window of windows) {
+    const workspaces = Array.isArray(window?.tabManager?.workspaces) ? window.tabManager.workspaces : []
+    for (const workspace of workspaces) {
+      const panels = Array.isArray(workspace?.panels) ? workspace.panels : []
+      for (const panel of panels) {
+        const panelTty = bareTty(panel?.ttyName)
+        const panelCwd = String(panel?.directory || panel?.terminal?.workingDirectory || workspace?.currentDirectory || '').trim()
+        if ((targetTty && panelTty === targetTty) || (targetCwd && panelCwd === targetCwd)) {
+          return {
+            workspaceTitle: workspace?.customTitle || workspace?.currentDirectory || '',
+            panelId: panel?.id || '',
+            panelTitle: panel?.customTitle || panel?.title || '',
+            tty: panelTty,
+            cwd: panelCwd,
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+
+async function listCmuxSurfaces() {
+  const bin = cmuxBinPath()
+  if (!bin) return []
+  let out = ''
+  try { out = await runCommand(bin, ['tree', '--all']) } catch { return [] }
+  const surfaces = []
+  let win = ''
+  let ws = ''
+  let pane = ''
+  for (const line of out.split('\n')) {
+    const w = line.match(/\bwindow\s+(window:\d+)/)
+    if (w) win = w[1]
+    const k = line.match(/\bworkspace\s+(workspace:\d+)/)
+    if (k) ws = k[1]
+    const p = line.match(/\bpane\s+(pane:\d+)/)
+    if (p) pane = p[1]
+    const s = line.match(/\bsurface\s+(surface:\d+)\b.*?\btty=(\S+)/)
+    if (s) surfaces.push({ window: win, workspace: ws, pane, surface: s[1], tty: bareTty(s[2]) })
+  }
+  return surfaces
+}
+
+function isCmuxAccessError(err) {
+  return /broken pipe|EPIPE|ECONNREFUSED|connection refused|handshake|outside the terminal/i.test(String(err?.message || ''))
+}
+
+async function focusCmuxForSession(rec) {
+  const bin = cmuxBinPath()
+  if (!bin) return null
+  let surfaces
+  try {
+    surfaces = await listCmuxSurfaces()
+  } catch (err) {
+    if (isCmuxAccessError(err)) console.error(`[kodama] cmux CLI refused - external process (issue #3089): ${err.message}`)
+    else console.error(`[kodama] cmux tree failed: ${err.message}`)
+    return null
+  }
+  let hit = rec.surface ? surfaces.find((s) => s.surface === rec.surface) : null
+  const matchedBy = hit ? 'surface' : 'tty'
+  if (!hit && rec.tty) hit = surfaces.find((s) => s.tty === bareTty(rec.tty))
+  if (!hit) return null
+  try {
+    if (hit.window) await runCommand(bin, ['focus-window', '--window', hit.window]).catch(() => {})
+    if (hit.workspace) await runCommand(bin, ['select-workspace', '--workspace', hit.workspace])
+    if (hit.pane) await runCommand(bin, ['focus-pane', '--pane', hit.pane, '--workspace', hit.workspace]).catch(() => {})
+    return { workspace: hit.workspace, pane: hit.pane, surface: hit.surface, tty: hit.tty, matchedBy }
+  } catch (err) {
+    if (isCmuxAccessError(err)) console.error(`[kodama] cmux focus refused - external process (issue #3089): ${err.message}`)
+    else console.error(`[kodama] cmux focus failed: ${err.message}`)
+    return null
+  }
+}
+
+async function resolveAgentTty(id, cwd) {
+  const rows = parsePs(await runCommand('ps', ['-axo', 'pid,ppid,pgid,tty,args']))
+  let hit = rows.find((row) => row.command.includes(id) && isAgentCommand(row.command) && normalizeTty(row.tty))
+  if (!hit && cwd) {
+    const want = String(cwd).trim()
+    const agents = rows.filter((row) => isAgentCommand(row.command) && normalizeTty(row.tty))
+    const matches = []
+    for (const row of agents) {
+      if (await processCwd(row.pid) === want) matches.push(row)
+    }
+    if (matches.length === 1) hit = matches[0]
+    else if (matches.length > 1) console.warn(`[kodama] cmux: ${matches.length} agents share cwd ${want}; tty ambiguous for ${id}`)
+  }
+  return hit ? normalizeTty(hit.tty) : ''
+}
+
+async function cacheSessionTty(sessionId, cwd) {
+  const id = String(sessionId || '').trim()
+  if (!id) return
+  const existing = getSessionRecord(id)
+  if (existing?.surface) return
+  try {
+    const tty = existing?.tty || await resolveAgentTty(id, cwd)
+    if (!tty) return
+    let surfaceInfo = null
+    try { surfaceInfo = (await listCmuxSurfaces()).find((s) => s.tty === bareTty(tty)) || null }
+    catch (err) { if (isCmuxAccessError(err)) console.error(`[kodama] cmux CLI refused while pinning (issue #3089): ${err.message}`) }
+    const record = {
+      tty,
+      surface: surfaceInfo?.surface || existing?.surface || '',
+      workspace: surfaceInfo?.workspace || existing?.workspace || '',
+      pane: surfaceInfo?.pane || existing?.pane || '',
+      window: surfaceInfo?.window || existing?.window || '',
+    }
+    if (JSON.stringify(record) !== JSON.stringify(existing || {})) {
+      sessionTtyCache.set(id, record)
+      saveSessionTtyCache()
+    }
+  } catch { /* best-effort */ }
 }
 
 function normalizeTty(value) {
@@ -544,16 +746,81 @@ async function openAppPath(appPath) {
   }
 }
 
+async function openCmuxFallback(target, rec, reason) {
+  const appPath = cmuxAppPath()
+  if (!appPath) return null
+  const panel = findCmuxPanel(rec, target)
+  if (!await openAppPath(appPath)) return null
+  const panelMatched = Boolean(panel)
+  const method = 'open cmux app'
+  logJump(method, {
+    session: target?.sessionId || '',
+    reason,
+    appPath,
+    panelMatched,
+    panelId: panel?.panelId || '',
+    tty: rec?.tty || '',
+  })
+  return {
+    ok: true,
+    method,
+    appPath,
+    reason,
+    panelMatched,
+    panel: panel || null,
+  }
+}
+
+function logJump(method, info) {
+  const line = `${new Date().toISOString()} ${method} ${JSON.stringify(info)}`
+  console.log(`[kodama] jump -> ${line}`)
+  try {
+    const file = path.join(app.getPath('userData'), 'kodama-jump.log')
+    let prev = ''
+    try { prev = fs.readFileSync(file, 'utf8') } catch { /* first run */ }
+    const trimmed = (prev + line + '\n').split('\n').slice(-200).join('\n')
+    fs.writeFileSync(file, trimmed)
+  } catch { /* logging must never break a jump */ }
+}
+
 async function openTerminalSessionTarget(target) {
   const found = await findCliSessionTarget(target)
-  const tty = normalizeTty(target?.tty) || normalizeTty(found?.tty)
-  if (tty && await activateTerminalTty(tty)) {
-    return { ok: true, method: 'Terminal tty', tty, pid: found?.pid || null }
+  const liveTty = normalizeTty(target?.tty) || normalizeTty(found?.tty)
+  const cached = target?.sessionId ? getSessionRecord(String(target.sessionId).trim()) : null
+  const rec = {
+    tty: liveTty || cached?.tty || '',
+    surface: cached?.surface || '',
+    workspace: cached?.workspace || '',
+    pane: cached?.pane || '',
+    window: cached?.window || '',
+  }
+
+  if ((rec.surface || rec.tty) && cmuxBinPath()) {
+    const cmux = await focusCmuxForSession(rec)
+    if (cmux) {
+      await openAppPath(found?.appPath || cmuxAppPath())
+      logJump('cmux focus', { session: target?.sessionId || '', ...cmux })
+      return { ok: true, method: 'cmux focus', tty: rec.tty, pid: found?.pid || null, ...cmux }
+    }
+  }
+
+  if (rec.tty && await activateTerminalTty(rec.tty)) {
+    logJump('Terminal tty', { session: target?.sessionId || '', tty: rec.tty })
+    return { ok: true, method: 'Terminal tty', tty: rec.tty, pid: found?.pid || null }
   }
   if (found?.appPath && await openAppPath(found.appPath)) {
-    return { ok: true, method: 'open host app', appPath: found.appPath, tty, pid: found.pid }
+    logJump('open host app', { session: target?.sessionId || '', appPath: found.appPath })
+    return { ok: true, method: 'open host app', appPath: found.appPath, tty: rec.tty, pid: found.pid }
   }
-  return { ok: false, error: found ? 'terminal-tab-not-found' : 'agent-process-not-found' }
+
+  const cmux = await openCmuxFallback(target, rec, rec.tty ? 'focus-unavailable' : 'session-not-live')
+  if (cmux) {
+    return cmux
+  }
+
+  const error = found ? 'terminal-target-unavailable' : 'agent-process-not-found'
+  logJump('failed', { session: target?.sessionId || '', error })
+  return { ok: false, error }
 }
 
 function appExists(name) {
@@ -1182,6 +1449,8 @@ function startLocalAgentServer() {
         return
       }
       if (event) {
+        const sid = event.sessionId || event.session_id
+        if (sid) cacheSessionTty(sid, event.cwd)
         emitRendererAgentEvent(event)
       }
       writeJson(res, 200, { ok: true })
@@ -1290,6 +1559,10 @@ function refreshTray() {
     ],
   })
   items.push({ label: '配饰', submenu: buildAccessoryMenu() })
+  const updateMenuItems = buildUpdateMenuItems()
+  if (updateMenuItems.length) {
+    items.push({ type: 'separator' }, ...updateMenuItems)
+  }
   const larkToday = stats.lark?.today || 0
   items.push(
     { type: 'separator' },
@@ -1325,11 +1598,39 @@ function registerGlobalShortcuts() {
   })
 }
 
+function shortMenuText(text, max = 36) {
+  const raw = String(text || '')
+  return raw.length > max ? `${raw.slice(0, max - 1)}...` : raw
+}
+
+function buildUpdateMenuItems() {
+  const update = getUpdateStatus()
+  if (!update.supported) return []
+  const version = update.version ? ` ${update.version}` : ''
+  if (update.downloaded) {
+    return [{ label: `安装更新${version}`, click: () => installDownloadedUpdate() }]
+  }
+  if (update.available) {
+    const percent = Number.isFinite(update.progress?.percent) ? `（${Math.round(update.progress.percent)}%）` : ''
+    return [{ label: `正在下载更新${version}${percent}`, enabled: false }]
+  }
+  if (update.checking) return [{ label: '正在检查更新...', enabled: false }]
+
+  const items = [{ label: '检查更新', click: () => checkForUpdates({ manual: true }) }]
+  if (update.error) items.push({ label: `更新失败：${shortMenuText(update.error)}`, enabled: false })
+  return items
+}
+
 app.whenReady().then(() => {
   console.error('[kodama] app ready')
+  loadSessionTtyCache()
   startLocalAgentServer()
   createWindow()
   createTray()
+  registerAutoUpdater({
+    onStatusChange: () => refreshTray(),
+    notifyPet: (payload) => sendToPet('pet-notify', payload),
+  })
   registerGlobalShortcuts()
   refreshTokenStats({ force: true })
   topmostInterval = setInterval(reassertTopmost, 15 * 1000)
@@ -1368,5 +1669,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  disposeAutoUpdater()
   globalShortcut.unregisterAll()
 })

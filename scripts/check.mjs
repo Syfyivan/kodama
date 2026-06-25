@@ -12,6 +12,7 @@ const CJS = [
   'src/main/hook-events.js',
   'src/main/token-usage.js',
   'src/main/pomodoro.js',
+  'src/main/updater.js',
 ]
 const ESM = [
   'src/renderer/renderer.js',
