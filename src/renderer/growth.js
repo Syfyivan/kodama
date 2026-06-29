@@ -141,6 +141,28 @@ export function feed(type) {
   applyGains(g.food, g.exp)
 }
 
+// 主动投喂:消耗食物换经验(食物自动从使用累积,投喂是把它"花"成成长)。
+const FEED_COST = 200 // 每次投喂消耗的食物(不足则全投)
+const FEED_EXP_RATE = 0.5 // 食物→经验的转化率
+export function feedManually() {
+  const cost = Math.min(state.food, FEED_COST)
+  if (cost <= 0) {
+    hooks.say?.('还没有食物呢，跑跑任务攒点 🍖', 2600)
+    return { ok: false, reason: 'no-food' }
+  }
+  state.food -= cost
+  const expGain = Math.max(1, Math.round(cost * FEED_EXP_RATE))
+  hooks.playMotion?.('Tap')
+  hooks.say?.(`投喂 -${cost}🍖 → +${expGain}⭐ 😋`, 2600)
+  applyGains(0, expGain) // 加经验 + 处理升级 + 持久化
+  return { ok: true, cost, expGain, level: state.level }
+}
+
+// 等级影响显示大小:幼崽小 → 成年大,温和封顶(31 级到顶 1.0,不打扰已满级桌宠)。
+export function growthScale() {
+  return Math.min(1, 0.7 + (state.level - 1) * 0.01)
+}
+
 // Feed the pet from cumulative token usage. First call only sets a baseline
 // (so pre-existing usage doesn't dump a huge level-up); afterwards each refresh
 // feeds the delta of newly-used tokens.
@@ -200,6 +222,29 @@ export function unequipAccessory(slot) {
   return { ok: true, action: 'unequip', slot, state: getState() }
 }
 
+// 用经验购买配饰:exp ≥ cost 则扣经验 + 加入已解锁 + 持久化。
+// 注意:exp 同时是升级货币(applyGains 会把 exp 攒满转成等级),所以可购买的
+// 预算 = 当前距下一级前累积的 exp。等级越高缓冲越大,买 emoji 件绰绰有余;
+// 不够时可先「投喂」把食物换成经验再来买。
+export function unlockWithExp(request) {
+  const id = typeof request === 'object' ? request?.id : request
+  const acc = accessoryById.get(id)
+  if (!acc) return { ok: false, reason: '未知配饰' }
+  if (state.unlockedAccessories.includes(acc.id)) {
+    return { ok: true, already: true, accessory: publicAccessory(acc), state: getState() }
+  }
+  const cost = Math.max(0, Math.floor(numberOr(acc.cost, 0)))
+  if (cost <= 0) return { ok: false, reason: `${acc.label} 不在商店出售` }
+  if (state.exp < cost) return { ok: false, reason: `经验不足(${state.exp}/${cost}⭐)` }
+
+  state.exp -= cost
+  const unlocked = new Set(state.unlockedAccessories)
+  unlocked.add(acc.id)
+  state.unlockedAccessories = activeAccessories.filter((a) => unlocked.has(a.id)).map((a) => a.id)
+  persist()
+  return { ok: true, action: 'unlock', cost, accessory: publicAccessory(acc), state: getState() }
+}
+
 function publicAccessory(acc) {
-  return { id: acc.id, slot: acc.slot, label: acc.label, unlockLevel: acc.unlockLevel }
+  return { id: acc.id, slot: acc.slot, label: acc.label, unlockLevel: acc.unlockLevel, icon: acc.icon, cost: acc.cost }
 }

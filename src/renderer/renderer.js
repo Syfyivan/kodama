@@ -4,7 +4,7 @@ import { reactToEvent } from './reactions.js'
 import { PET_CONFIG } from './config/pet-config.js'
 import { initAccessoryLayer } from './accessories.js'
 import { ACCESSORIES, ACCESSORY_SLOTS } from './config/accessories.js'
-import { initGrowth, feed as feedGrowth, feedTokens, statusText, getState as getGrowthState, equipAccessory, configureAccessories } from './growth.js'
+import { initGrowth, feed as feedGrowth, feedManually, growthScale, feedTokens, statusText, getState as getGrowthState, equipAccessory, unlockWithExp, configureAccessories } from './growth.js'
 
 // Live2D model is chosen by `pnpm run setup <name>` (writes ./models/current-model.js).
 const FALLBACK_MODEL_URL = './models/wanko/Wanko.model3.json'
@@ -22,6 +22,7 @@ const panelTabs = document.getElementById('panel-tabs')
 const panelHeader = document.querySelector('.panel-header')
 const panelClose = document.getElementById('event-panel-close')
 const bridgeTasksOpen = document.getElementById('bridge-tasks-open')
+const manageOpen = document.getElementById('manage-open')
 const bridgeTasksRefresh = document.getElementById('bridge-tasks-refresh')
 const bridgeTasksShare = document.getElementById('bridge-tasks-share')
 const bridgeTasksWindow = document.getElementById('bridge-tasks-window')
@@ -66,6 +67,7 @@ document.body.appendChild(bubbleHoverTip)
 
 // Active rendering backend: { getBounds(), playMotion(pref), setStatus(status) }.
 let backend = null
+let activeGifConfig = null // set when the gif backend is active (for evolution图鉴)
 let accessoryLayer = null
 let panelVisible = false
 let agentSyncStatus = 'offline'
@@ -80,11 +82,13 @@ const eventLog = []
 const bubbleLog = []
 const sessionPreviewCache = new Map()
 const pendingBubbleShares = new Set()
+const pendingSubagentShares = new Set()
 const MAX_EVENT_LOG = 40
 const MAX_TRANSIENT_BUBBLES = 6
 const MAX_PERSISTENT_BUBBLES = 120
 const PANEL_TABS = new Set(['settings', 'waiting', 'done', 'sessions', 'bridge', 'recent', 'config'])
 const BUBBLE_ACTION_DEBOUNCE_MS = 600
+const ACTIVE_TARGET_TTL_MS = 10 * 60 * 1000
 const FLOATING_PADDING = 8
 const BUBBLE_WIDTH = 340
 const PANEL_WIDTH = 310
@@ -115,6 +119,9 @@ const DEFAULT_UI_SETTINGS = {
   panelCorner: 'near',
   bubbleAnchor: 58,
   bubbleGap: 4,
+  petX: null, // pet position inside the full-workarea overlay (null = auto bottom-right)
+  petY: null,
+  ttsEnabled: false, // speak important events via macOS `say`
 }
 let uiSettings = loadUiSettings()
 let pomodoroSettings = {
@@ -132,6 +139,7 @@ let moveModeTimer = 0
 let refreshMouseInteractivity = () => {}
 let bubbleActionCooldownUntil = 0
 let bubbleActionCooldownTimer = 0
+let activeViewedTarget = { key: '', at: 0 }
 
 function clampNumber(value, min, max, fallback) {
   const n = Number(value)
@@ -158,6 +166,9 @@ function normalizeUiSettings(source = {}) {
       : DEFAULT_UI_SETTINGS.panelCorner,
     bubbleAnchor: clampNumber(source.bubbleAnchor, 35, 80, DEFAULT_UI_SETTINGS.bubbleAnchor),
     bubbleGap: clampNumber(source.bubbleGap, 0, 48, DEFAULT_UI_SETTINGS.bubbleGap),
+    petX: Number.isFinite(source.petX) ? source.petX : null,
+    petY: Number.isFinite(source.petY) ? source.petY : null,
+    ttsEnabled: source.ttsEnabled === true,
   }
 }
 
@@ -177,6 +188,15 @@ function saveUiSettings() {
   localStorage.setItem('kodama-ui-settings', JSON.stringify(uiSettings))
 }
 
+let savePetPosTimer = 0
+function scheduleSavePetPos() {
+  if (savePetPosTimer) return
+  savePetPosTimer = setTimeout(() => {
+    savePetPosTimer = 0
+    saveUiSettings()
+  }, 400)
+}
+
 function applyUiSettings() {
   document.documentElement.style.setProperty('--pet-scale', String(uiSettings.petScale))
   document.documentElement.style.setProperty('--pet-opacity', String(uiSettings.petOpacity))
@@ -191,6 +211,7 @@ function applyUiSettings() {
   positionPanel()
   configureWander()
   syncSettingControls()
+  window.pet.reportUiSettings?.(uiSettings) // keep the management window in sync
 }
 
 function setDndMode(enabled, announce = true) {
@@ -279,7 +300,15 @@ async function init() {
     if (local?.RENDER?.backend === 'gif') {
       const { initGifBackend } = await import('./backends/gif.js')
       canvas.style.display = 'none'
-      backend = initGifBackend(local.RENDER.gif || {})
+      activeGifConfig = local.RENDER.gif || {}
+      backend = initGifBackend(activeGifConfig)
+      // The gif backend is a plain <img>; give it the same petX/petY positioning
+      // Live2D gets via layout(), or it can't be dragged (drag updates petX/petY
+      // then calls applySettings, which was a no-op for gif before).
+      backend.applySettings = gifLayout
+      backend.el.addEventListener('load', gifLayout)
+      window.addEventListener('resize', gifLayout)
+      gifLayout()
     } else {
       backend = await initLive2D()
     }
@@ -287,6 +316,31 @@ async function init() {
     await loadAccessoryPack()
     configureAccessories({ accessories: activeAccessories, slots: activeAccessorySlots })
     setupInteraction()
+    // Tray "size" presets push a pet scale into the renderer (the overlay window
+    // itself is fixed to the work area now).
+    window.pet.onSetScale?.((scale) => {
+      uiSettings.petScale = clampNumber(scale, 0.4, 1.25, uiSettings.petScale)
+      saveUiSettings()
+      applyUiSettings()
+    })
+    // 管理窗口的「摸摸」按钮
+    window.pet.onDoPet?.(() => {
+      backend?.playMotion('Tap')
+      say('摸摸~ 🐾', 1600)
+    })
+    // 管理窗口的「投喂」按钮:食物→经验,升级可能变大 → 重排
+    window.pet.onDoFeed?.(() => {
+      feedManually()
+      syncAccessories()
+      backend?.applySettings?.()
+    })
+    // Settings changed from the management window arrive as a patch.
+    window.pet.onApplyUiPatch?.((patch) => {
+      if (!patch || typeof patch !== 'object') return
+      uiSettings = normalizeUiSettings({ ...uiSettings, ...patch })
+      saveUiSettings()
+      applyUiSettings()
+    })
     accessoryLayer = initAccessoryLayer(() => backend?.getBounds?.(), { accessories: activeAccessories })
     applyUiSettings()
     loadPomodoroSettings()
@@ -306,15 +360,24 @@ async function init() {
     }
     await initGrowth(hooks)
     syncAccessories()
+    const lastTarget = await window.pet.getLastOpenedTarget?.()
+    if (lastTarget) noteActiveTarget(lastTarget)
+    // initGrowth loads the real level after the first applyUiSettings() already
+    // sized the pet at level 1; re-layout once so the pet reflects its actual
+    // growth size (growthScale) instead of rendering ~30% too small until the
+    // first feed/setting change. Same idempotent layout used on resize/feed.
+    backend?.applySettings?.()
     const handleAgentEvent = (event) => {
       recordAgentEvent(event)
+      // 子 Agent / team-worker 事件只进详情统计和 session 列表,不冒泡/不 TTS。
       const isSubagent = event?.subagent === true
         || Boolean(event?.agentTranscriptPath || event?.agent_transcript_path || event?.agentId || event?.agent_id)
-      if (!uiSettings.dndMode && !isSubagent) {
+      if (!uiSettings.dndMode && !isSubagent && !shouldSuppressForegroundBubble(event)) {
         reactToEvent(event, hooks, {
           sound: uiSettings.soundEnabled,
           notifications: uiSettings.notificationsEnabled,
         })
+        speakEvent(event) // optional macOS TTS for important events
       }
       feedGrowth(event.type) // P4: events feed the pet
       // Cross-source token ledger: bridge (source 'lark') events may carry tokens.
@@ -340,6 +403,21 @@ async function init() {
       if (result.action === 'equip') say(`已佩戴 ${result.accessory.label}`, 2200)
       if (result.action === 'unequip') say('已摘下配饰', 1800)
     })
+    // 配饰商店购买:用经验解锁,解锁后顺手佩戴。
+    window.pet.onUnlockAccessory?.((request) => {
+      const result = unlockWithExp(request)
+      if (!result.ok) {
+        say(`🛒 ${result.reason}`, 2800)
+        syncAccessories()
+        return
+      }
+      if (!result.already) {
+        backend?.playMotion?.('Tap')
+        say(`🛒 解锁 ${result.accessory.label} ${result.accessory.icon || ''} -${result.cost}⭐`, 2800)
+      }
+      equipAccessory({ slot: result.accessory.slot, id: result.accessory.id })
+      syncAccessories()
+    })
 
     // P4: poll local token usage and feed the pet by token delta.
     refreshTokens()
@@ -357,14 +435,37 @@ async function init() {
   }
 }
 
+// Report the slime's evolution stages + current level to the management window
+// (via main cache), so it can show an evolution图鉴 — useful since a high-level
+// pet only ever shows its final form. No-op for Live2D / stage-less configs.
+function syncEvolution(level) {
+  if (!activeGifConfig?.stages?.length) {
+    window.pet.reportEvolution?.(null)
+    return
+  }
+  window.pet.reportEvolution?.({
+    set: activeGifConfig.set || 'default',
+    level,
+    stages: activeGifConfig.stages.map((s) => ({
+      file: s.file,
+      minLevel: Number(s.minLevel) || 1,
+      label: s.label || '',
+    })),
+  })
+}
+
 function syncAccessories() {
   const state = getGrowthState()
+  backend?.setLevel?.(state.level) // gif backend: evolve the sprite by level
+  syncEvolution(state.level)
   accessoryLayer?.setEquipped(state.equippedAccessories || {})
   window.pet.updateAccessoryMenu?.({
     slots: activeAccessorySlots,
-    accessories: activeAccessories.map(({ id, slot, label, unlockLevel }) => ({ id, slot, label, unlockLevel })),
+    accessories: activeAccessories.map(({ id, slot, label, unlockLevel, icon, cost }) => ({ id, slot, label, unlockLevel, icon, cost })),
     unlocked: state.unlockedAccessories || [],
     equipped: state.equippedAccessories || {},
+    exp: state.exp,
+    level: state.level,
   })
 }
 
@@ -395,11 +496,32 @@ async function initLive2D() {
 
   function layout() {
     const { originalWidth, originalHeight } = model.internalModel
-    const scale = Math.min(window.innerWidth / originalWidth, window.innerHeight / originalHeight) * uiSettings.petScale
+    // The window now spans the whole work area, so scale against a nominal pet
+    // box (not the window) and place the model at the persisted petX/petY.
+    const PET_BOX_W = 280
+    const PET_BOX_H = 400
+    const baseScale = Math.min(PET_BOX_W / originalWidth, PET_BOX_H / originalHeight)
+    // 等级越高桌宠越大(幼崽→成年),再乘用户的大小偏好。
+    const scale = baseScale * uiSettings.petScale * growthScale()
     model.alpha = uiSettings.petOpacity
     model.scale.set(scale)
-    model.x = (window.innerWidth - model.width) / 2
-    model.y = window.innerHeight - model.height
+    const pw = model.width
+    const ph = model.height
+    const margin = 24
+    const autoX = window.innerWidth - pw - margin
+    const autoY = window.innerHeight - ph - margin
+    // Honor edge mode. Live2D models carry a lot of transparent padding, so
+    // clamping fully-inside leaves a big visible gap. 'half' lets the pet hang
+    // partway off-screen so its visible body can truly hug/reach the edge.
+    const minVisible = uiSettings.edgeMode === 'half' ? 0.42 : 1
+    const overflowX = pw * (1 - minVisible)
+    const overflowY = ph * (1 - minVisible)
+    const px = clampPoint(Number.isFinite(uiSettings.petX) ? uiSettings.petX : autoX, -overflowX, window.innerWidth - pw + overflowX)
+    const py = clampPoint(Number.isFinite(uiSettings.petY) ? uiSettings.petY : autoY, -overflowY, window.innerHeight - ph + overflowY)
+    model.x = px
+    model.y = py
+    uiSettings.petX = px
+    uiSettings.petY = py
     positionBubble()
     positionPanel()
   }
@@ -444,9 +566,14 @@ function petBounds() {
   return b
 }
 
+function isMoveModeActive() {
+  return moveModeUntil > Date.now()
+}
+
 function interactivePetBounds() {
   const b = petBounds()
   if (!b) return null
+  if (isMoveModeActive()) return b
   const width = b.width * uiSettings.hitboxScale
   const height = b.height * uiSettings.hitboxScale
   const centerX = b.x + b.width / 2
@@ -468,6 +595,42 @@ function dragVisibleBounds() {
     ...b,
     minVisibleRatio: uiSettings.edgeMode === 'half' ? 0.42 : 1,
   }
+}
+
+// Position the gif backend's <img> by petX/petY, mirroring Live2D's layout() so
+// the slime can be dragged and hugs edges. Scale/opacity also ride here (baked
+// into width/height) instead of the CSS transform, so getBounds stays truthful.
+function gifLayout() {
+  const img = backend?.el
+  if (!img) return
+  const natW = img.naturalWidth || 212
+  const natH = img.naturalHeight || 159
+  const scale = uiSettings.petScale * growthScale()
+  const pw = natW * scale
+  const ph = natH * scale
+  img.style.maxWidth = 'none'
+  img.style.maxHeight = 'none'
+  img.style.transform = 'none'
+  img.style.bottom = 'auto'
+  img.style.width = `${pw}px`
+  img.style.height = `${ph}px`
+  img.style.opacity = String(uiSettings.petOpacity)
+  const margin = 24
+  const autoX = window.innerWidth - pw - margin
+  const autoY = window.innerHeight - ph - margin
+  // gif sprites are tight (little transparent padding), so 'half' is gentler here
+  // than for Live2D (whose models carry big padding) — otherwise the body gets cut.
+  const minVisible = uiSettings.edgeMode === 'half' ? 0.7 : 1
+  const overflowX = pw * (1 - minVisible)
+  const overflowY = ph * (1 - minVisible)
+  const px = clampPoint(Number.isFinite(uiSettings.petX) ? uiSettings.petX : autoX, -overflowX, window.innerWidth - pw + overflowX)
+  const py = clampPoint(Number.isFinite(uiSettings.petY) ? uiSettings.petY : autoY, -overflowY, window.innerHeight - ph + overflowY)
+  img.style.left = `${px}px`
+  img.style.top = `${py}px`
+  uiSettings.petX = px
+  uiSettings.petY = py
+  positionBubble()
+  positionPanel()
 }
 
 function overPet(x, y) {
@@ -499,10 +662,6 @@ function debounceBubbleActions(ms = BUBBLE_ACTION_DEBOUNCE_MS) {
     renderBubbles()
   }, ms + 20)
   renderBubbles()
-}
-
-function isMoveModeActive() {
-  return moveModeUntil > Date.now()
 }
 
 function syncMoveModeUi() {
@@ -602,10 +761,16 @@ function setupInteraction() {
     lastClientX = e.clientX
     lastClientY = e.clientY
     if (dragging) {
-      window.pet.move(e.screenX - lastX, e.screenY - lastY, dragVisibleBounds())
+      // Move the pet *within* the full-workarea overlay; layout() re-clamps so
+      // it can hug any edge, and repositions the bubble adaptively.
+      const baseX = Number.isFinite(uiSettings.petX) ? uiSettings.petX : 0
+      const baseY = Number.isFinite(uiSettings.petY) ? uiSettings.petY : 0
+      uiSettings.petX = baseX + (e.screenX - lastX)
+      uiSettings.petY = baseY + (e.screenY - lastY)
       lastX = e.screenX
       lastY = e.screenY
-      scheduleFloatingLayout()
+      backend?.applySettings?.()
+      scheduleSavePetPos()
       return
     }
     syncIgnoringState()
@@ -613,13 +778,14 @@ function setupInteraction() {
 
   window.addEventListener('mousedown', (e) => {
     if (panelVisible || e.button !== 0 || overElement(bubble, e.clientX, e.clientY)) return
-    const explicitDrag = e.altKey || e.metaKey
-    if (uiSettings.triggerMode !== 'left' && !explicitDrag && !isMoveModeActive()) return
     if (!overPet(e.clientX, e.clientY)) return
-    startDrag(e, { tap: uiSettings.triggerMode === 'left' && !explicitDrag && !isMoveModeActive() })
+    // 左键直接按在桌宠身上即可拖动(抓住就拖,符合直觉);静止点击不会移动它,
+    // 左键触发模式下静止点击=摸摸。右键仍打开面板。
+    startDrag(e, { tap: uiSettings.triggerMode === 'left' && !isMoveModeActive() })
   })
 
   window.addEventListener('mouseup', () => {
+    if (dragging) saveUiSettings()
     dragging = false
     syncIgnoringState()
   })
@@ -918,8 +1084,21 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
     setElementCorner(el, 'top-right', fallbackWidth, fallbackHeight)
     return
   }
-  const gap = Math.max(8, uiSettings.bubbleGap)
-  const petRect = { left: pet.x, top: pet.y, right: pet.x + pet.width, bottom: pet.y + pet.height, width: pet.width, height: pet.height }
+  // Live2D bounds carry a lot of transparent padding, so snuggling against the
+  // raw bounds leaves a big visible gap. Anchor the bubble to a centered visible
+  // core instead, and keep the gap well under half the pet width.
+  const CORE = 0.58
+  const coreW = pet.width * CORE
+  const coreH = pet.height * CORE
+  const gap = Math.min(Math.max(6, uiSettings.bubbleGap), coreW * 0.5)
+  const petRect = {
+    left: pet.x + (pet.width - coreW) / 2,
+    top: pet.y + (pet.height - coreH) / 2,
+    right: pet.x + (pet.width + coreW) / 2,
+    bottom: pet.y + (pet.height + coreH) / 2,
+    width: coreW,
+    height: coreH,
+  }
   const visiblePet = rectIntersection(petRect, area)
   const anchorX = clampPoint(pet.x + pet.width / 2, area.left + padding, area.right - padding)
   const anchorY = clampPoint(
@@ -1059,9 +1238,26 @@ function bubbleKind(event) {
   return 'system'
 }
 
+function baseName(p) {
+  return String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''
+}
+
+// A per-task headline so stacked bubbles are distinguishable at a glance, instead
+// of every card reading the same "本地 · 完成". Prefer the project folder (always
+// present for Claude Code hooks), then the task prompt (Codex input-messages),
+// then degrade to the generic source label.
+function taskName(event) {
+  const cwd = event.cwd || event.projectDir || event.project_dir || event.workspacePath || event.workspace_path || ''
+  const project = baseName(cwd)
+  if (project) return project
+  const prompt = event.prompt || event.title || ''
+  if (prompt) return shortText(prompt, 28)
+  return sourceLabel(event.source)
+}
+
 function bubbleTitle(event) {
   if (!event) return 'Kodama'
-  return `${sourceLabel(event.source)} · ${typeLabel(event.type)}`
+  return `${taskName(event)} · ${typeLabel(event.type)}`
 }
 
 function isCodexTranscriptPath(value) {
@@ -1310,9 +1506,25 @@ function previewKey(request) {
   ].join(':')
 }
 
+// Build a hover summary from the event alone — used when no transcript file is
+// available (Codex `agent-turn-complete` notify carries the prompt + result but
+// no transcript path, so the file-read preview always failed before).
+function localPreviewFromEvent(event) {
+  const lines = []
+  if (event?.prompt) lines.push(`你: ${shortText(event.prompt, 74)}`)
+  if (event?.text) lines.push(`Agent: ${shortText(event.text, 74)}`)
+  if (!lines.length) return { ok: false, error: '这条事件没有可显示的摘要' }
+  return { ok: true, title: bubbleTitle(event), lines }
+}
+
 async function ensureBubblePreview(item, event, anchor) {
   const request = sessionRequestForEvent(item.event)
   if (!request || item.preview?.ok || item.preview?.loading) return
+  // No transcript on disk → synthesize from the event (avoids missing-transcript-path).
+  if (!request.transcriptPath && !request.agentTranscriptPath) {
+    item.preview = localPreviewFromEvent(item.event)
+    return
+  }
   const key = previewKey(request)
   if (sessionPreviewCache.has(key)) {
     item.preview = sessionPreviewCache.get(key)
@@ -1337,6 +1549,7 @@ init()
 function setupEventPanel() {
   panelClose?.addEventListener('click', () => togglePanel(false))
   bridgeTasksOpen?.addEventListener('click', () => openBridgeTasksWindow())
+  manageOpen?.addEventListener('click', () => window.pet.openManageWindow?.())
   bridgeTasksRefresh?.addEventListener('click', () => refreshBridgeTasks({ force: true }))
   bridgeTasksShare?.addEventListener('click', () => shareBridgeTaskViewer())
   bridgeTasksWindow?.addEventListener('click', () => openBridgeTasksWindow())
@@ -1446,6 +1659,12 @@ function setupEventPanel() {
     if (sizeButton) {
       const [width, height] = String(sizeButton.dataset.windowSize || '').split('x').map(Number)
       window.pet.setWindowSize?.({ width, height })
+      return
+    }
+    const shareSub = e.target.closest?.('[data-share-subagent]')
+    if (shareSub) {
+      e.stopPropagation()
+      shareSubagentTranscript(shareSub.dataset.shareSubagent)
       return
     }
     const item = e.target.closest?.('[data-event-id]')
@@ -1574,6 +1793,29 @@ function targetKey(target) {
   return target.url || target.path || target.threadId || target.sessionId || `${target.chatId || ''}:${target.messageId || ''}`
 }
 
+function noteActiveTarget(target) {
+  const key = targetKey(target)
+  if (!key) return
+  activeViewedTarget = { key, at: Date.now() }
+}
+
+function isTargetLikelyActive(target) {
+  const key = targetKey(target)
+  if (!key || !activeViewedTarget.key) return false
+  return activeViewedTarget.key === key && (Date.now() - activeViewedTarget.at) <= ACTIVE_TARGET_TTL_MS
+}
+
+function shouldSuppressForegroundBubble(event) {
+  if (!event) return false
+  if (!new Set(['task_started', 'task_progress', 'task_done', 'agent_done', 'share_ready']).has(event.type)) {
+    return false
+  }
+  const target = targetForEvent(event)
+  const active = isTargetLikelyActive(target)
+  if (active) activeViewedTarget.at = Date.now()
+  return active
+}
+
 function openableEvents() {
   const seen = new Set()
   const out = []
@@ -1604,6 +1846,7 @@ async function openTarget(target) {
       : target.kind === 'codex-thread'
         ? '正在打开 Codex 会话'
         : '正在打开飞书会话'
+  noteActiveTarget(target)
   say(text, 1400)
   return true
 }
@@ -1655,6 +1898,57 @@ async function shareBubbleSession(id) {
 function openEventById(id) {
   const event = eventLog.find(item => item.id === String(id))
   if (event?.target) openTarget(event.target)
+}
+
+// Optional spoken notification for important events (macOS `say`, off by default).
+const TTS_LINES = {
+  task_done: '任务完成',
+  agent_done: '子任务完成',
+  task_failed: '任务失败',
+  task_waiting: '需要你确认',
+  pomodoro_completed: '番茄钟完成',
+  lark_message_received: '飞书有新消息',
+}
+function speakEvent(event) {
+  if (!uiSettings.ttsEnabled || !event) return
+  const line = TTS_LINES[event.type]
+  if (!line) return
+  const src = event.source === 'lark' ? '飞书' : '本地'
+  window.pet.speak?.(`${src}，${line}`)
+}
+
+// Share a single sub-agent's own conversation (its transcript file → session-share).
+async function shareSubagentTranscript(transcript) {
+  const transcriptPath = String(transcript || '').trim()
+  if (pendingSubagentShares.has(transcriptPath)) return
+  const sessionId = inferSessionIdFromTranscriptPath(transcriptPath)
+  if (!sessionId) {
+    say('这个子 Agent 没有可分享的会话文件', 2600)
+    return
+  }
+  pendingSubagentShares.add(transcriptPath)
+  syncEventPanel()
+  say('正在生成子 Agent 分享链接...', 2200)
+  try {
+    const result = await window.pet.shareSession?.({
+      provider: 'claude',
+      sessionId,
+      transcriptPath,
+      bridgeUrl: activeAgentConfig.bridgeUrl || DEFAULT_BRIDGE_URL,
+      token: activeAgentConfig.token || '',
+    })
+    if (!result?.ok) {
+      say(`子 Agent 分享失败：${result?.error || 'bridge 没返回链接'}`, 4200)
+      return
+    }
+    const url = result.url || result.share?.url
+    notifyShareReady(url ? `子 Agent 分享链接已复制到剪贴板：${url}` : '子 Agent 分享链接已生成，已复制到剪贴板')
+  } catch (error) {
+    say(`子 Agent 分享失败：${error?.message || error}`, 4200)
+  } finally {
+    pendingSubagentShares.delete(transcriptPath)
+    syncEventPanel()
+  }
 }
 
 function openBubbleTarget(event = activeBubbleEvent, bubbleId = '') {
@@ -1823,16 +2117,59 @@ function renderSessionList(el, list) {
     return
   }
   el.className = 'event-list sessions'
-  el.innerHTML = list.map((event) => [
-    `<article class="event-item" data-event-id="${escapeHtml(event.id || '')}">`,
-    '<div class="event-meta">',
-    `<span>${escapeHtml(sourceLabel(event.source))} · ${escapeHtml(typeLabel(event.type))}</span>`,
-    `<time>${escapeHtml(fmtTime(event.receivedAt))}</time>`,
-    '</div>',
-    `<div class="event-text">${escapeHtml(eventText(event))}</div>`,
-    `<div class="event-target">${escapeHtml(event.target?.label || '打开会话')}</div>`,
-    '</article>',
-  ].join('')).join('')
+  el.innerHTML = list.map((event) => {
+    const subs = subagentsForSession(event)
+    const parent = [
+      `<article class="event-item" data-event-id="${escapeHtml(event.id || '')}">`,
+      '<div class="event-meta">',
+      `<span>${escapeHtml(sourceLabel(event.source))} · ${escapeHtml(typeLabel(event.type))}${subs.length ? ` · ${subs.length} 子 Agent` : ''}</span>`,
+      `<time>${escapeHtml(fmtTime(event.receivedAt))}</time>`,
+      '</div>',
+      `<div class="event-text">${escapeHtml(eventText(event))}</div>`,
+      `<div class="event-target">${escapeHtml(event.target?.label || '打开会话')}</div>`,
+      '</article>',
+    ].join('')
+    // Sub-agents run inside the parent session's terminal, so clicking jumps to
+    // the same parent terminal; the value here is showing them separately with a
+    // clear parent→child hierarchy.
+    const children = subs.map((sub) => [
+      `<article class="event-item event-subagent" data-event-id="${escapeHtml(event.id || '')}" title="子 Agent 运行在父会话终端内">`,
+      `<div class="event-subagent-name">↳ 子 Agent · ${escapeHtml(sub.name)}`,
+      subagentShareButtonHtml(sub.transcript),
+      '</div>',
+      `<div class="event-text">${escapeHtml(eventText(sub.last))}</div>`,
+      '</article>',
+    ].join('')).join('')
+    return parent + children
+  }).join('')
+}
+
+function subagentShareButtonHtml(transcript) {
+  const transcriptPath = String(transcript || '').trim()
+  if (!transcriptPath) return ''
+  const pending = pendingSubagentShares.has(transcriptPath)
+  return [
+    `<button type="button" class="subagent-share" data-share-subagent="${escapeHtml(transcriptPath)}"`,
+    pending ? ' disabled aria-busy="true"' : '',
+    `>${pending ? '分享中...' : '分享'}</button>`,
+  ].join('')
+}
+
+// Collect the sub-agents (SubagentStart/Stop carry agent_transcript_path + the
+// parent session_id) belonging to a parent session, deduped by transcript.
+function subagentsForSession(sessionEvent) {
+  const parentId = sessionEvent?.sessionId || sessionEvent?.session_id || ''
+  if (!parentId) return []
+  const seen = new Set()
+  const subs = []
+  for (const ev of eventLog) {
+    const transcript = ev.agentTranscriptPath || ev.agent_transcript_path || ''
+    const pid = ev.sessionId || ev.session_id || ''
+    if (!transcript || pid !== parentId || seen.has(transcript)) continue
+    seen.add(transcript)
+    subs.push({ transcript, name: ev.agent || ev.agentId || ev.agent_id || '子 Agent', last: ev })
+  }
+  return subs
 }
 
 function renderConfig() {

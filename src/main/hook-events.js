@@ -120,6 +120,8 @@ function localContext(data) {
   const turnId = firstString(data?.['turn-id'], data?.turn_id, data?.turnId)
   const client = firstString(data?.client, data?.originator, data?.source_app, data?.sourceApp)
   const tty = firstString(data?.tty, data?.terminal_tty, data?.terminalTty)
+  const prompt = firstString(data?.prompt)
+  if (prompt) context.prompt = clampText(prompt, 80)
   if (sessionId) context.sessionId = sessionId
   if (cwd) context.cwd = cwd
   if (transcriptPath) context.transcriptPath = transcriptPath
@@ -147,9 +149,19 @@ function withSubagent(event, data) {
   return { ...withAgent(event, data), subagent: true }
 }
 
+// Codex notify carries the turn's user input as `input-messages` (array or string).
+// It's the closest thing to a task title, so we surface it for the bubble headline.
+function codexInputPrompt(data) {
+  const raw = data['input-messages'] || data.input_messages || data.inputMessages
+  if (Array.isArray(raw)) return clampText(raw.filter(Boolean).join(' '), 80)
+  return clampText(raw, 80)
+}
+
 function codexNotifyToEvent(data) {
   if (data.type === 'agent-turn-complete') {
-    return withLocalContext({ type: 'task_done', source: 'local', text: clampText(data['last-assistant-message']) }, data)
+    const event = withLocalContext({ type: 'task_done', source: 'local', text: clampText(data['last-assistant-message']) }, data)
+    const prompt = codexInputPrompt(data)
+    return prompt ? { ...event, prompt } : event
   }
   if (/permission|approval|confirm|ask/i.test(String(data.type || ''))) {
     return withLocalContext({ type: 'task_waiting', source: 'local', text: clampText(data.message || data.reason || '需要你确认') }, data)
@@ -176,13 +188,14 @@ function mapHookToEvent(data) {
       }
       const command = commandEvent(data)
       if (command) return command
-      return withLocalContext({ type: 'task_progress', source: 'local', text: name ? `正在用工具：${name}` : '正在调用工具' }, data)
+      // Only surface notable commands (test/build/git). Generic per-tool calls
+      // would flood the pet, so they produce no event.
+      return null
     }
     case 'PostToolUse': {
-      const name = toolName(data)
       const command = commandEvent(data, { done: true, failed: data.error || data.success === false })
       if (command) return command
-      return withLocalContext({ type: 'task_progress', source: 'local', text: name ? `工具完成：${name}` : '工具调用完成' }, data)
+      return null
     }
     case 'SubagentStart':
       return withSubagent({ type: 'task_progress', source: 'local', text: agentName(data) ? `子 Agent ${agentName(data)} 开始工作` : '子 Agent 开始工作' }, data)

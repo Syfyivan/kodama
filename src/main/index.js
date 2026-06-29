@@ -19,8 +19,14 @@ const {
   shareSession: createSessionShare,
 } = require('./bridge-client')
 
+// Local hook receiver port — declared early; referenced by top-level consts
+// (e.g. KODAMA_HOOK_CURL) that would otherwise hit the temporal dead zone.
+const LOCAL_AGENT_PORT = 7766
+
 let win
 let taskWin
+let manageWin
+let lastUiSettings = null
 let tray
 let pomodoro = null
 let sedentaryTimer = null
@@ -44,15 +50,30 @@ function sendToPet(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
 }
 
+function combinedWorkAreaBounds(displays = screen.getAllDisplays()) {
+  const areas = displays
+    .map(display => display?.workArea)
+    .filter(area => area && Number.isFinite(area.x) && Number.isFinite(area.y) && area.width > 0 && area.height > 0)
+  if (!areas.length) return screen.getPrimaryDisplay().workArea
+  const left = Math.min(...areas.map(area => area.x))
+  const top = Math.min(...areas.map(area => area.y))
+  const right = Math.max(...areas.map(area => area.x + area.width))
+  const bottom = Math.max(...areas.map(area => area.y + area.height))
+  return { x: left, y: top, width: right - left, height: bottom - top }
+}
+
 function createWindow() {
-  const { workArea } = screen.getPrimaryDisplay()
-  const { width, height, x, y } = loadWindowState(workArea)
+  const workArea = combinedWorkAreaBounds()
 
   win = new BrowserWindow({
-    width,
-    height,
-    x,
-    y,
+    // Full visible-workarea transparent overlay across every display. The pet is
+    // positioned *inside* this window (renderer petX/petY), so it can travel
+    // between monitors instead of being trapped inside the primary display.
+    x: workArea.x,
+    y: workArea.y,
+    width: workArea.width,
+    height: workArea.height,
+    movable: false,
     transparent: true,
     frame: false,
     hasShadow: false, // otherwise a grey rectangle shadow shows around the model
@@ -60,6 +81,14 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
+    // macOS: a non-activating NSPanel is what reliably floats over *other apps'*
+    // native fullscreen spaces (not just the desktop). 'panel' adds
+    // NSWindowStyleMaskNonactivatingPanel at runtime and joins all spaces; paired
+    // with app.setActivationPolicy('accessory') in whenReady. A harmless
+    // "NSWindow does not support nonactivating panel styleMask" warning is
+    // expected for frameless windows (electron/electron#35815, wontfix).
+    // https://www.electronjs.org/docs/latest/api/base-window (type: 'panel')
+    ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -126,6 +155,38 @@ function createBridgeTasksWindow() {
     taskWin = null
   })
   return taskWin
+}
+
+// A real, roomy settings/management window (the right-click overlay panel is
+// cramped). It talks to the pet renderer's ui-settings via the main cache.
+function openManageWindow() {
+  if (manageWin && !manageWin.isDestroyed()) {
+    manageWin.show()
+    manageWin.focus()
+    return manageWin
+  }
+  manageWin = new BrowserWindow({
+    width: 760,
+    height: 720,
+    minWidth: 560,
+    minHeight: 520,
+    title: 'Kodama 管理',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  manageWin.loadFile(path.join(__dirname, '../renderer/manage.html'))
+  manageWin.once('ready-to-show', () => {
+    manageWin.show()
+    manageWin.focus()
+  })
+  manageWin.on('closed', () => {
+    manageWin = null
+  })
+  return manageWin
 }
 
 // Float above everything — including other apps' fullscreen spaces — on all desktops.
@@ -212,7 +273,9 @@ const windowStateFile = () => path.join(app.getPath('userData'), 'kodama-window.
 // sessionId -> { tty, surface, workspace, pane, window }, captured while a session
 // is alive so we can still jump to its cmux tab after the agent process exits.
 // We pin cmux's own surface id (not just the tty) because ttys get reused by new
-// panes and several panes can share a cwd.
+// panes and several panes can share a cwd — keying on tty/cwd alone is why jumps
+// used to drift to the wrong tab. cmux's own notifications never drift because
+// they carry the surface id; pinning it here brings us to parity.
 const sessionTtyFile = () => path.join(app.getPath('userData'), 'kodama-session-tty.json')
 let sessionTtyCache = new Map()
 let sessionTtySaveTimer = null
@@ -220,22 +283,23 @@ function loadSessionTtyCache() {
   try {
     const obj = JSON.parse(fs.readFileSync(sessionTtyFile(), 'utf8'))
     if (obj && typeof obj === 'object') sessionTtyCache = new Map(Object.entries(obj))
-  } catch { /* first run / corrupt - start empty */ }
+  } catch { /* first run / corrupt — start empty */ }
 }
 function saveSessionTtyCache() {
   if (sessionTtySaveTimer) return
   sessionTtySaveTimer = setTimeout(() => {
     sessionTtySaveTimer = null
-    try { fs.writeFileSync(sessionTtyFile(), JSON.stringify(Object.fromEntries(sessionTtyCache))) } catch { /* ignore */ }
+    try { writeJsonAtomic(sessionTtyFile(), Object.fromEntries(sessionTtyCache)) } catch { /* ignore */ }
   }, 1000)
 }
+// Normalize a cache entry into a record. Old caches stored a bare tty string, so
+// upgrade those transparently instead of forcing a re-pin.
 function getSessionRecord(id) {
   const v = sessionTtyCache.get(String(id || '').trim())
   if (!v) return null
   if (typeof v === 'string') return { tty: v, surface: '', workspace: '', pane: '', window: '' }
   return { tty: '', surface: '', workspace: '', pane: '', window: '', ...v }
 }
-
 function clampWindowState(state, workArea) {
   const margin = 8
   const width = Math.min(state.width, Math.max(180, workArea.width - margin * 2))
@@ -308,22 +372,93 @@ function saveWindowState() {
   const [x, y] = win.getPosition()
   const [width, height] = win.getSize()
   try {
-    fs.writeFileSync(windowStateFile(), JSON.stringify({ version: WINDOW_STATE_VERSION, width, height, x, y }))
+    writeJsonAtomic(windowStateFile(), { version: WINDOW_STATE_VERSION, width, height, x, y })
   } catch (err) {
     console.error(`[kodama] save window state failed: ${err.message}`)
   }
 }
 
-function setPetSize(width, height) {
+// The overlay window now spans the whole work area; "size" means scaling the
+// pet inside it, which the renderer owns. Tray presets just push a scale.
+function setPetScale(scale) {
+  sendToPet('pet:set-scale', scale)
+}
+
+// One-click registration of the Kodama hook into local coding-agent hook files.
+// SAFE: backs up first, only APPENDS the 7766 curl to events that don't already
+// have it (never touches existing hooks), idempotent. Triggered manually from the
+// tray — never written silently.
+const KODAMA_HOOK_CURL =
+  `curl -s -m 1 --noproxy 127.0.0.1 -X POST http://127.0.0.1:${LOCAL_AGENT_PORT} -H 'Content-Type: application/json' -d "$(cat)" >/dev/null 2>&1 || true`
+// Mirror the richer event surface Flux Island listens to, but Kodama still keeps
+// its renderer-side filtering narrow so we don't spam every tool call.
+const KODAMA_HOOK_EVENTS = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'PermissionRequest',
+  'Notification',
+  'PreToolUse',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'SubagentStart',
+  'SubagentStop',
+  'Stop',
+  'StopFailure',
+  'SessionEnd',
+]
+
+function registerHookFile(file, label, { dryRun = false, allowCreate = false } = {}) {
+  let json
+  try {
+    json = JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch (err) {
+    if (!allowCreate || err?.code !== 'ENOENT') {
+      return { ok: false, error: `读取 ${label} 失败: ${err.message}` }
+    }
+    json = { hooks: {} }
+  }
+  json.hooks = json.hooks || {}
+  const added = []
+  const next = { ...json, hooks: { ...json.hooks } }
+  for (const ev of KODAMA_HOOK_EVENTS) {
+    const list = Array.isArray(next.hooks[ev]) ? next.hooks[ev].slice() : []
+    if (JSON.stringify(list).includes(`:${LOCAL_AGENT_PORT}`)) continue // already wired
+    list.push({ hooks: [{ type: 'command', command: KODAMA_HOOK_CURL }] })
+    next.hooks[ev] = list
+    added.push(ev)
+  }
+  if (dryRun) return { ok: true, added, dryRun: true }
+  if (!added.length) return { ok: true, added: [], message: `${label} 已是最新，无需改动` }
+  try {
+    fs.copyFileSync(file, `${file}.bak-kodama-${Date.now()}`)
+    writeJsonAtomic(file, next, { pretty: true })
+  } catch (err) {
+    return { ok: false, error: `写入 ${label} 失败: ${err.message}` }
+  }
+  return { ok: true, added }
+}
+
+function registerLocalCliHooks(options = {}) {
+  const home = app.getPath('home')
+  const targets = [
+    { key: 'claude', label: 'Claude Code settings.json', file: path.join(home, '.claude', 'settings.json'), allowCreate: false },
+    { key: 'codex', label: 'Codex hooks.json', file: path.join(home, '.codex', 'hooks.json'), allowCreate: true },
+  ]
+  const summary = {}
+  let ok = true
+  for (const target of targets) {
+    const result = registerHookFile(target.file, target.label, { ...options, allowCreate: target.allowCreate })
+    summary[target.key] = result
+    if (!result.ok) ok = false
+  }
+  return { ok, summary }
+}
+
+// Keep the overlay covering the combined visible work area across display changes.
+function fitWindowToWorkArea() {
   if (!win || win.isDestroyed()) return
-  const [oldX, oldY] = win.getPosition()
-  const display = screen.getDisplayMatching({ x: oldX, y: oldY, width, height })
-  const next = defaultWindowState(display.workArea, width, height)
-  win.setResizable(true) // some platforms ignore setSize while non-resizable
-  win.setSize(next.width, next.height)
-  win.setResizable(false)
-  win.setPosition(next.x, next.y)
-  saveWindowState()
+  const workArea = combinedWorkAreaBounds()
+  win.setBounds({ x: workArea.x, y: workArea.y, width: workArea.width, height: workArea.height })
 }
 
 // renderer -> main: toggle click-through
@@ -345,12 +480,37 @@ ipcMain.on('pet:move', (e, dx, dy, visibleBounds) => {
   saveWindowState()
 })
 
-ipcMain.on('pet:set-window-size', (_e, size) => {
-  const width = Number(size?.width)
-  const height = Number(size?.height)
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return
-  setPetSize(Math.max(180, width), Math.max(240, height))
+ipcMain.on('pet:set-window-size', () => {
+  // No-op: the overlay spans the full work area now; pet size is a renderer scale.
 })
+
+// Management window <-> pet renderer ui-settings sync, brokered by main.
+ipcMain.on('pet:report-ui-settings', (_e, settings) => {
+  if (settings && typeof settings === 'object') lastUiSettings = settings
+})
+ipcMain.handle('pet:get-ui-settings', () => lastUiSettings)
+ipcMain.on('pet:patch-ui-settings', (_e, patch) => {
+  if (patch && typeof patch === 'object') sendToPet('pet:apply-ui-patch', patch)
+})
+ipcMain.handle('pet:open-manage-window', () => {
+  openManageWindow()
+  return { ok: true }
+})
+
+let sayProc = null
+ipcMain.on('pet:speak', (_e, text) => {
+  if (process.platform !== 'darwin') return // uses macOS built-in `say`
+  const line = String(text || '').trim().slice(0, 80)
+  if (!line) return
+  try {
+    if (sayProc && !sayProc.killed) sayProc.kill() // interrupt the previous line
+    sayProc = spawn('say', [line], { stdio: 'ignore' }) // array args = no shell injection
+    sayProc.on('error', () => {})
+  } catch { /* TTS is best-effort */ }
+})
+
+ipcMain.on('pet:pet-action', () => sendToPet('pet:do-pet')) // 管理窗口「摸摸」→ 桌宠
+ipcMain.on('pet:feed-pet', () => sendToPet('pet:do-feed')) // 管理窗口「投喂」→ 桌宠
 
 ipcMain.on('pet:set-hidden', (_e, hidden) => {
   setPetHidden(hidden)
@@ -474,19 +634,47 @@ async function openLocalTarget(target) {
   return { ok: true, path: resolved.path, method: 'shell.showItemInFolder' }
 }
 
-function runCommand(command, args) {
+// All callers are short-lived local commands (lsof / ps / cmux / osascript / open).
+// A hung child (cmux half-open socket, unresponsive Terminal) must never wedge a
+// jump forever — every call gets a hard timeout that SIGTERMs the strays.
+function runCommand(command, args, { timeout = 8000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
+    let settled = false
+    let timer = null
+    const finish = (fn, arg) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      fn(arg)
+    }
     child.stdout.on('data', chunk => { stdout += chunk })
     child.stderr.on('data', chunk => { stderr += chunk })
-    child.once('error', reject)
+    child.once('error', (err) => finish(reject, err))
     child.once('close', (code) => {
-      if (code === 0) resolve(stdout)
-      else reject(new Error(stderr.trim() || `${command} exited ${code}`))
+      if (code === 0) finish(resolve, stdout)
+      else finish(reject, new Error(stderr.trim() || `${command} exited ${code}`))
     })
+    if (timeout > 0) {
+      timer = setTimeout(() => {
+        try { child.kill('SIGTERM') } catch { /* already exited */ }
+        finish(reject, new Error(`${command} timed out after ${timeout}ms`))
+      }, timeout)
+      if (typeof timer.unref === 'function') timer.unref()
+    }
   })
+}
+
+// Crash-safe JSON write: a process death mid-write must not leave a truncated file
+// that the next read silently treats as corrupt and resets to defaults — that path
+// loses the user's level / food / token ledger without warning. Write a sibling temp
+// file, then rename (atomic on the same filesystem).
+function writeJsonAtomic(file, value, { pretty = false } = {}) {
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(value, null, pretty ? 2 : undefined))
+  fs.renameSync(tmp, file)
 }
 
 function parsePs(stdout) {
@@ -510,6 +698,8 @@ function appPathFromCommand(command) {
 
 const isAgentCommand = (command) => /(^|\/|\s)(claude|codex)(\s|$)/i.test(String(command || ''))
 
+// Working directory of a pid via lsof (used to locate an agent session whose id
+// isn't on its argv — e.g. Claude Code, where we only know the cwd).
 async function processCwd(pid) {
   try {
     const out = await runCommand('lsof', ['-a', '-d', 'cwd', '-Fn', '-p', String(pid)])
@@ -525,10 +715,14 @@ async function findCliSessionTarget(target) {
   const cwd = String(target?.cwd || '').trim()
   const rows = parsePs(await runCommand('ps', ['-axo', 'pid,ppid,pgid,tty,args']))
   const byPid = new Map(rows.map(row => [row.pid, row]))
+
+  // 1) Strongest signal: the agent process carries the session id on its argv.
   let hit = sessionId
     ? rows.find((row) => row.command.includes(sessionId) && isAgentCommand(row.command))
     : null
 
+  // 2) Fallback: match a running agent by working directory (Claude Code rarely
+  //    puts the session id on argv, which is why jumps used to miss the tty).
   if (!hit && cwd) {
     const agents = rows.filter((row) => isAgentCommand(row.command) && normalizeTty(row.tty))
     for (const row of agents) {
@@ -549,6 +743,9 @@ async function findCliSessionTarget(target) {
 }
 
 // ---------- cmux integration ----------
+// cmux ships a socket-control CLI; we use it to focus the exact workspace/pane
+// that hosts a session instead of blindly re-opening the app (which dumped the
+// user into a fresh cmux). Join key between our session and cmux is the tty.
 function cmuxBinPath() {
   for (const base of ['/Applications', path.join(app.getPath('home'), 'Applications')]) {
     const p = path.join(base, 'cmux.app', 'Contents', 'Resources', 'bin', 'cmux')
@@ -576,38 +773,79 @@ function readCmuxState() {
   }
 }
 
-function findCmuxPanel(rec, target) {
+function cmuxStatePanels() {
   const state = readCmuxState()
   const windows = Array.isArray(state?.windows) ? state.windows : []
-  const targetTty = bareTty(rec?.tty)
-  const targetCwd = String(target?.cwd || '').trim()
-  for (const window of windows) {
+  const out = []
+  for (const [windowIndex, window] of windows.entries()) {
     const workspaces = Array.isArray(window?.tabManager?.workspaces) ? window.tabManager.workspaces : []
-    for (const workspace of workspaces) {
+    for (const [workspaceIndex, workspace] of workspaces.entries()) {
       const panels = Array.isArray(workspace?.panels) ? workspace.panels : []
-      for (const panel of panels) {
-        const panelTty = bareTty(panel?.ttyName)
-        const panelCwd = String(panel?.directory || panel?.terminal?.workingDirectory || workspace?.currentDirectory || '').trim()
-        if ((targetTty && panelTty === targetTty) || (targetCwd && panelCwd === targetCwd)) {
-          return {
-            workspaceTitle: workspace?.customTitle || workspace?.currentDirectory || '',
-            panelId: panel?.id || '',
-            panelTitle: panel?.customTitle || panel?.title || '',
-            tty: panelTty,
-            cwd: panelCwd,
-          }
-        }
+      for (const [panelIndex, panel] of panels.entries()) {
+        out.push({
+          windowIndex,
+          workspaceIndex,
+          panelIndex,
+          workspaceTitle: workspace?.customTitle || workspace?.currentDirectory || '',
+          workspaceCwd: String(workspace?.currentDirectory || '').trim(),
+          workspaceSelected: workspaceIndex === Number(window?.tabManager?.selectedWorkspaceIndex ?? -1),
+          panelId: panel?.id || '',
+          panelTitle: panel?.customTitle || panel?.title || '',
+          tty: bareTty(panel?.ttyName),
+          cwd: String(panel?.directory || panel?.terminal?.workingDirectory || workspace?.currentDirectory || '').trim(),
+        })
       }
     }
   }
+  return out
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim())
+}
+
+function findCmuxPanel(rec, target) {
+  const panels = cmuxStatePanels()
+  const targetTty = bareTty(rec?.tty)
+  const targetPanelId = [rec?.panelId, rec?.surface].find(isUuid) || ''
+  const targetCwd = String(target?.cwd || '').trim()
+
+  if (targetPanelId) {
+    const hit = panels.find((panel) => panel.panelId.toLowerCase() === targetPanelId.toLowerCase())
+    if (hit) return { ...hit, matchedBy: 'panel' }
+  }
+
+  if (targetTty) {
+    const matches = panels.filter((panel) => panel.tty === targetTty)
+    if (matches.length === 1) return { ...matches[0], matchedBy: 'tty' }
+    if (matches.length > 1) {
+      console.warn(`[kodama] cmux: ${matches.length} panels share tty ${targetTty}; refusing to guess`)
+      return null
+    }
+  }
+
+  if (targetCwd) {
+    const matches = panels.filter((panel) => panel.cwd === targetCwd || panel.workspaceCwd === targetCwd)
+    if (matches.length === 1) return { ...matches[0], matchedBy: 'cwd' }
+    if (matches.length > 1) {
+      console.warn(`[kodama] cmux: ${matches.length} panels share cwd ${targetCwd}; refusing to guess`)
+      return null
+    }
+  }
+
   return null
 }
 
+// Parse `cmux tree --all` into surfaces with their enclosing window/workspace/pane.
 async function listCmuxSurfaces() {
   const bin = cmuxBinPath()
   if (!bin) return []
   let out = ''
-  try { out = await runCommand(bin, ['tree', '--all']) } catch { return [] }
+  try { out = await runCommand(bin, ['tree', '--all']) } catch (err) {
+    if (isCmuxAccessError(err)) console.error(`[kodama] cmux tree refused — external process or socket policy: ${err.message}`)
+    else console.error(`[kodama] cmux tree failed: ${err.message}`)
+    return []
+  }
   const surfaces = []
   let win = ''
   let ws = ''
@@ -625,18 +863,55 @@ async function listCmuxSurfaces() {
   return surfaces
 }
 
+// cmux's default cmuxOnly socket policy rejects clients that were not started
+// from cmux, surfacing as a broken pipe / refused handshake. Kodama is an
+// external Electron process, so we flag this distinctly instead of reporting a
+// missing tab.
 function isCmuxAccessError(err) {
   return /broken pipe|EPIPE|ECONNREFUSED|connection refused|handshake|outside the terminal/i.test(String(err?.message || ''))
 }
 
-async function focusCmuxForSession(rec) {
+// Focus the exact cmux surface hosting a session. Prefers the surface id we pinned
+// while the session was alive (immune to tty reuse / shared-cwd ambiguity), and
+// only falls back to a live tty match when no surface was pinned. The live
+// `cmux tree` listing is the source of truth, so stale/closed panes are skipped.
+async function focusCmuxPanel(panel) {
   const bin = cmuxBinPath()
   if (!bin) return null
+  if (!panel?.panelId || !isUuid(panel.panelId)) return null
+  // A cwd-only match is too weak to drive a hard focus: another session in the same directory
+  // would get jumped to. Skip it and let the caller fall back to merely opening cmux.
+  if (panel.matchedBy === 'cwd') return null
+  try {
+    await runCommand(bin, ['rpc', 'surface.focus', JSON.stringify({ surface_id: panel.panelId })])
+    return {
+      workspace: '',
+      pane: '',
+      surface: panel.panelId,
+      panelId: panel.panelId,
+      tty: panel.tty || '',
+      matchedBy: panel.matchedBy || 'panel',
+      focusApi: 'surface.focus',
+    }
+  } catch (err) {
+    if (isCmuxAccessError(err)) console.error(`[kodama] cmux surface.focus refused — external process or socket policy: ${err.message}`)
+    else console.error(`[kodama] cmux surface.focus failed: ${err.message}`)
+    return null
+  }
+}
+
+async function focusCmuxForSession(rec, target) {
+  const bin = cmuxBinPath()
+  if (!bin) return null
+  const panel = findCmuxPanel(rec, target)
+  const focusedPanel = await focusCmuxPanel(panel)
+  if (focusedPanel) return focusedPanel
+
   let surfaces
   try {
     surfaces = await listCmuxSurfaces()
   } catch (err) {
-    if (isCmuxAccessError(err)) console.error(`[kodama] cmux CLI refused - external process (issue #3089): ${err.message}`)
+    if (isCmuxAccessError(err)) console.error(`[kodama] cmux CLI refused — external process (issue #3089): ${err.message}`)
     else console.error(`[kodama] cmux tree failed: ${err.message}`)
     return null
   }
@@ -650,12 +925,16 @@ async function focusCmuxForSession(rec) {
     if (hit.pane) await runCommand(bin, ['focus-pane', '--pane', hit.pane, '--workspace', hit.workspace]).catch(() => {})
     return { workspace: hit.workspace, pane: hit.pane, surface: hit.surface, tty: hit.tty, matchedBy }
   } catch (err) {
-    if (isCmuxAccessError(err)) console.error(`[kodama] cmux focus refused - external process (issue #3089): ${err.message}`)
+    if (isCmuxAccessError(err)) console.error(`[kodama] cmux focus refused — external process (issue #3089): ${err.message}`)
     else console.error(`[kodama] cmux focus failed: ${err.message}`)
     return null
   }
 }
 
+// Resolve the tty of a live agent process. Strongest signal: the session id is on
+// the agent's argv (Codex). Fallback: match the agent by cwd (Claude Code rarely
+// puts the session id on argv). If several agents share the cwd we cannot tell
+// them apart by tty, so we refuse to guess rather than pin the wrong pane.
 async function resolveAgentTty(id, cwd) {
   const rows = parsePs(await runCommand('ps', ['-axo', 'pid,ppid,pgid,tty,args']))
   let hit = rows.find((row) => row.command.includes(id) && isAgentCommand(row.command) && normalizeTty(row.tty))
@@ -672,23 +951,41 @@ async function resolveAgentTty(id, cwd) {
   return hit ? normalizeTty(hit.tty) : ''
 }
 
+// While a session is alive, pin its cmux surface so we can jump precisely later —
+// even after the agent process exits and its tty gets reused. Cheap once pinned:
+// returns immediately when a surface is already known; otherwise resolves the tty
+// once, then keeps trying to upgrade it to a cmux surface as cmux comes/goes.
 async function cacheSessionTty(sessionId, cwd) {
   const id = String(sessionId || '').trim()
   if (!id) return
   const existing = getSessionRecord(id)
-  if (existing?.surface) return
+  if (existing?.surface && existing?.panelId) return // fully pinned — nothing better to learn
+  // Once a surface is pinned the only thing left to chase is the cmux panelId. Some cmux builds
+  // never expose it, so cap the attempts — otherwise every hook event re-spawns `ps` + `cmux tree`
+  // forever for such a session (a steady background spawn churn).
+  const panelTries = Number(existing?.panelTries || 0)
+  if (existing?.surface && panelTries >= 3) return
   try {
     const tty = existing?.tty || await resolveAgentTty(id, cwd)
     if (!tty) return
     let surfaceInfo = null
-    try { surfaceInfo = (await listCmuxSurfaces()).find((s) => s.tty === bareTty(tty)) || null }
-    catch (err) { if (isCmuxAccessError(err)) console.error(`[kodama] cmux CLI refused while pinning (issue #3089): ${err.message}`) }
+    // Skip the `cmux tree` spawn once a surface is already known — we only re-enter here for the panelId.
+    if (!existing?.surface) {
+      try { surfaceInfo = (await listCmuxSurfaces()).find((s) => s.tty === bareTty(tty)) || null }
+      catch (err) { if (isCmuxAccessError(err)) console.error(`[kodama] cmux CLI refused while pinning (issue #3089): ${err.message}`) }
+    }
+    // Only pin a panelId confirmed by tty/panel identity — a cwd-derived one would later be
+    // jumped to as if authoritative, reintroducing the same-directory misjump we guard against.
+    const panelMatch = findCmuxPanel({ tty }, { cwd })
+    const panelId = (panelMatch && panelMatch.matchedBy !== 'cwd' ? panelMatch.panelId : '') || existing?.panelId || ''
     const record = {
       tty,
       surface: surfaceInfo?.surface || existing?.surface || '',
       workspace: surfaceInfo?.workspace || existing?.workspace || '',
       pane: surfaceInfo?.pane || existing?.pane || '',
       window: surfaceInfo?.window || existing?.window || '',
+      panelId,
+      panelTries: panelId ? 0 : panelTries + 1,
     }
     if (JSON.stringify(record) !== JSON.stringify(existing || {})) {
       sessionTtyCache.set(id, record)
@@ -763,7 +1060,7 @@ async function openCmuxFallback(target, rec, reason) {
   })
   return {
     ok: true,
-    method,
+    method: 'open cmux app',
     appPath,
     reason,
     panelMatched,
@@ -771,9 +1068,13 @@ async function openCmuxFallback(target, rec, reason) {
   }
 }
 
+// Append-only, self-trimming jump log so a misfire can be diagnosed without
+// knowing the internals: each line records which path won (cmux focus / Terminal
+// tty / open host app / failed) and how cmux matched (surface vs tty fallback).
+// Path: <userData>/kodama-jump.log  (see message printed at startup).
 function logJump(method, info) {
   const line = `${new Date().toISOString()} ${method} ${JSON.stringify(info)}`
-  console.log(`[kodama] jump -> ${line}`)
+  console.log(`[kodama] jump → ${line}`)
   try {
     const file = path.join(app.getPath('userData'), 'kodama-jump.log')
     let prev = ''
@@ -786,6 +1087,7 @@ function logJump(method, info) {
 async function openTerminalSessionTarget(target) {
   const found = await findCliSessionTarget(target)
   const liveTty = normalizeTty(target?.tty) || normalizeTty(found?.tty)
+  // Surface pinned while the session was alive — survives process exit and tty reuse.
   const cached = target?.sessionId ? getSessionRecord(String(target.sessionId).trim()) : null
   const rec = {
     tty: liveTty || cached?.tty || '',
@@ -793,12 +1095,15 @@ async function openTerminalSessionTarget(target) {
     workspace: cached?.workspace || '',
     pane: cached?.pane || '',
     window: cached?.window || '',
+    panelId: cached?.panelId || '',
   }
 
-  if ((rec.surface || rec.tty) && cmuxBinPath()) {
-    const cmux = await focusCmuxForSession(rec)
+  // Prefer cmux: focus the exact surface/pane rather than re-opening the app
+  // (which used to spawn a stray cmux instead of jumping).
+  if ((rec.surface || rec.tty || rec.panelId || target?.cwd) && cmuxBinPath()) {
+    const cmux = await focusCmuxForSession(rec, target)
     if (cmux) {
-      await openAppPath(found?.appPath || cmuxAppPath())
+      await openAppPath(found?.appPath || cmuxBinPath().replace(/\/Contents\/.*$/, ''))
       logJump('cmux focus', { session: target?.sessionId || '', ...cmux })
       return { ok: true, method: 'cmux focus', tty: rec.tty, pid: found?.pid || null, ...cmux }
     }
@@ -808,7 +1113,9 @@ async function openTerminalSessionTarget(target) {
     logJump('Terminal tty', { session: target?.sessionId || '', tty: rec.tty })
     return { ok: true, method: 'Terminal tty', tty: rec.tty, pid: found?.pid || null }
   }
-  if (found?.appPath && await openAppPath(found.appPath)) {
+
+  const foundAppPath = String(found?.appPath || '')
+  if (foundAppPath && !/\/cmux\.app$/i.test(foundAppPath) && await openAppPath(foundAppPath)) {
     logJump('open host app', { session: target?.sessionId || '', appPath: found.appPath })
     return { ok: true, method: 'open host app', appPath: found.appPath, tty: rec.tty, pid: found.pid }
   }
@@ -816,6 +1123,11 @@ async function openTerminalSessionTarget(target) {
   const cmux = await openCmuxFallback(target, rec, rec.tty ? 'focus-unavailable' : 'session-not-live')
   if (cmux) {
     return cmux
+  }
+
+  if (foundAppPath && await openAppPath(foundAppPath)) {
+    logJump('open host app', { session: target?.sessionId || '', appPath: foundAppPath })
+    return { ok: true, method: 'open host app', appPath: foundAppPath, tty: rec.tty, pid: found.pid }
   }
 
   const error = found ? 'terminal-target-unavailable' : 'agent-process-not-found'
@@ -883,6 +1195,8 @@ ipcMain.handle('pet:open-target', async (_e, target) => {
   clipboard.writeText(urls[0])
   return { ok: false, error: lastError || 'open-target-failed', copiedUrl: urls[0] }
 })
+
+ipcMain.handle('pet:get-last-opened-target', () => lastOpenedTarget?.target || null)
 
 function shortSessionIdFromPath(value) {
   const file = String(value || '').split(path.sep).pop() || ''
@@ -1065,7 +1379,7 @@ ipcMain.handle('pet:get-state', () => {
 })
 ipcMain.on('pet:save-state', (_e, state) => {
   try {
-    fs.writeFileSync(stateFile(), JSON.stringify(state))
+    writeJsonAtomic(stateFile(), state)
   } catch (err) {
     console.error(`[kodama] save state failed: ${err.message}`)
   }
@@ -1075,6 +1389,17 @@ ipcMain.on('pet:accessory-menu', (_e, state) => {
   accessoryMenuState = state && typeof state === 'object' ? state : null
   refreshTray()
 })
+// 管理中心「配饰商店」:读缓存的配饰目录,以及佩戴/购买命令转发给桌宠渲染端。
+ipcMain.handle('pet:get-accessory-catalog', () => accessoryMenuState)
+ipcMain.on('pet:equip-accessory-cmd', (_e, payload) => sendToPet('pet:equip-accessory', payload))
+ipcMain.on('pet:unlock-accessory-cmd', (_e, payload) => sendToPet('pet:unlock-accessory', payload))
+
+// 管理中心「进化图鉴」:桌宠渲染端上报当前皮肤的进化阶段 + 等级,管理窗读取。
+let evolutionState = null
+ipcMain.on('pet:evolution-state', (_e, state) => {
+  evolutionState = state && typeof state === 'object' ? state : null
+})
+ipcMain.handle('pet:get-evolution', () => evolutionState)
 
 ipcMain.on('pet:ui-menu-state', (_e, state) => {
   if (state && typeof state === 'object') {
@@ -1122,7 +1447,7 @@ function loadPomodoroSettings() {
 
 function savePomodoroSettings(settings) {
   try {
-    fs.writeFileSync(pomodoroSettingsFile(), JSON.stringify(settings))
+    writeJsonAtomic(pomodoroSettingsFile(), settings)
   } catch (err) {
     console.error(`[kodama] save pomodoro settings failed: ${err.message}`)
   }
@@ -1293,7 +1618,7 @@ ipcMain.on('pet:add-lark-tokens', (_e, tokens) => {
   const led = loadLarkLedger()
   led[day] = (led[day] || 0) + n
   try {
-    fs.writeFileSync(larkTokensFile(), JSON.stringify(led))
+    writeJsonAtomic(larkTokensFile(), led)
     updateLarkTokenStatsCache()
     refreshTray()
     refreshTokenStats({ force: true })
@@ -1317,7 +1642,6 @@ ipcMain.handle('pet:token-stats', () => {
 // Local receiver for Claude Code / Codex hooks. They POST lifecycle events here;
 // we map them to pet events (source:'local') and forward to the renderer, so
 // local sessions and the Feishu bot share one pet.
-const LOCAL_AGENT_PORT = 7766
 const HOOK_TOKEN = process.env.KODAMA_HOOK_TOKEN || '' // optional shared secret
 const MAX_BODY_BYTES = 64 * 1024
 
@@ -1357,6 +1681,8 @@ function controlPet(action) {
     showPetAndMaybeTogglePanel(true)
   } else if (action === 'bridge-tasks') {
     createBridgeTasksWindow()
+  } else if (action === 'manage') {
+    openManageWindow()
   } else {
     return { ok: false, error: 'unknown-control-action' }
   }
@@ -1384,6 +1710,7 @@ function startLocalAgentServer() {
         localEventCount,
         lastLocalEvent,
         lastOpenedTarget,
+        updateStatus: getUpdateStatus(),
         tokenStats: tokenStatsCache,
         loginItemEnabled: isLoginItemEnabled(),
       })
@@ -1393,7 +1720,7 @@ function startLocalAgentServer() {
       writeJson(res, 200, { ok: true, ...getCachedTokenStats() })
       return
     }
-    const controlMatch = url.pathname.match(/^\/pet\/(show|hide|toggle|panel|bridge-tasks)$/)
+    const controlMatch = url.pathname.match(/^\/pet\/(show|hide|toggle|panel|bridge-tasks|manage)$/)
     if (controlMatch && (req.method === 'GET' || req.method === 'POST')) {
       writeJson(res, 200, controlPet(controlMatch[1]))
       return
@@ -1450,7 +1777,7 @@ function startLocalAgentServer() {
       }
       if (event) {
         const sid = event.sessionId || event.session_id
-        if (sid) cacheSessionTty(sid, event.cwd)
+        if (sid) cacheSessionTty(sid, event.cwd) // pin tty + cmux surface while alive
         emitRendererAgentEvent(event)
       }
       writeJson(res, 200, { ok: true })
@@ -1503,8 +1830,11 @@ function buildAccessoryMenu() {
       },
       ...slotAccessories.map((acc) => {
         const isUnlocked = unlocked.has(acc.id)
+        const name = acc.icon ? `${acc.icon} ${acc.label}` : acc.label
+        // 锁定项:商店件提示售价(去管理中心购买),等级件提示所需等级。
+        const lockedLabel = acc.cost ? `🔒 ${name}（${acc.cost}⭐·商店）` : `🔒 Lv.${acc.unlockLevel} ${name}`
         return {
-          label: isUnlocked ? acc.label : `🔒 Lv.${acc.unlockLevel} ${acc.label}`,
+          label: isUnlocked ? name : lockedLabel,
           type: isUnlocked ? 'radio' : 'normal',
           checked: equipped[slot.id] === acc.id,
           enabled: isUnlocked,
@@ -1532,6 +1862,25 @@ function refreshTray() {
   })
   items.push({ label: '事件 / 配置面板  ⌘⌥P', click: () => showPetAndMaybeTogglePanel(true) })
   items.push({ label: '移动桌宠  ⌘⌥M', click: () => showPetAndEnterMoveMode() })
+  items.push({ label: '管理 / 设置中心…', click: () => openManageWindow() })
+  items.push({
+    label: '补齐 Claude / Codex Hooks → Kodama',
+    click: () => {
+      const result = registerLocalCliHooks()
+      const parts = []
+      for (const [key, value] of Object.entries(result.summary || {})) {
+        if (!value?.ok) {
+          parts.push(`${key} 失败：${value?.error || '未知错误'}`)
+          continue
+        }
+        if (value.added?.length) parts.push(`${key} 已补齐：${value.added.join(', ')}`)
+        else parts.push(`${key} 已是最新`)
+      }
+      const body = `${parts.join('\n')}\n重启对应的 Claude / Codex 会话后生效`
+      try { new Notification({ title: 'Kodama · Local Hooks', body }).show() } catch { /* ignore */ }
+      console.error(`[kodama] register local hooks: ${JSON.stringify(result)}`)
+    },
+  })
   items.push({ label: 'Bridge 任务详情', click: () => createBridgeTasksWindow() })
   items.push({
     label: petUiMenuState.dndMode ? '退出勿扰模式' : '进入勿扰模式',
@@ -1552,10 +1901,10 @@ function refreshTray() {
   items.push({
     label: '大小',
     submenu: [
-      { label: '很小', click: () => setPetSize(200, 290) },
-      { label: '小', click: () => setPetSize(280, 400) },
-      { label: '中（默认）', click: () => setPetSize(360, 520) },
-      { label: '大', click: () => setPetSize(460, 650) },
+      { label: '很小', click: () => setPetScale(0.5) },
+      { label: '小', click: () => setPetScale(0.72) },
+      { label: '中（默认）', click: () => setPetScale(0.95) },
+      { label: '大', click: () => setPetScale(1.2) },
     ],
   })
   items.push({ label: '配饰', submenu: buildAccessoryMenu() })
@@ -1624,6 +1973,10 @@ function buildUpdateMenuItems() {
 app.whenReady().then(() => {
   console.error('[kodama] app ready')
   loadSessionTtyCache()
+  // macOS: become an accessory (agent) app — no Dock icon, never grabs a Space.
+  // The other half (with the pet window's type:'panel') of reliably floating
+  // over other apps' native fullscreen spaces.
+  if (process.platform === 'darwin') app.setActivationPolicy('accessory')
   startLocalAgentServer()
   createWindow()
   createTray()
@@ -1635,9 +1988,10 @@ app.whenReady().then(() => {
   refreshTokenStats({ force: true })
   topmostInterval = setInterval(reassertTopmost, 15 * 1000)
   topmostInterval.unref?.()
-  screen.on('display-added', scheduleTopmostReassert)
-  screen.on('display-removed', scheduleTopmostReassert)
-  screen.on('display-metrics-changed', scheduleTopmostReassert)
+  const onDisplayChange = () => { fitWindowToWorkArea(); scheduleTopmostReassert() }
+  screen.on('display-added', onDisplayChange)
+  screen.on('display-removed', onDisplayChange)
+  screen.on('display-metrics-changed', onDisplayChange)
   app.on('browser-window-focus', scheduleTopmostReassert)
   app.on('browser-window-blur', scheduleTopmostReassert)
 

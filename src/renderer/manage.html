@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' file:;" />
+  <title>Kodama 管理</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.5 -apple-system, "PingFang SC", system-ui, sans-serif;
+      color: #1c2430;
+      background: #f4f6f9;
+      padding: 18px 20px 28px;
+    }
+    h1 { font-size: 17px; margin: 0 0 2px; }
+    .sub { color: #6b7787; font-size: 12px; margin: 0 0 16px; }
+    .card {
+      background: #fff;
+      border: 1px solid rgba(111, 125, 145, 0.16);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin-bottom: 14px;
+    }
+    .card h2 { font-size: 13px; margin: 0 0 10px; color: #3a4658; letter-spacing: .02em; }
+    .row { display: grid; grid-template-columns: 120px 1fr 56px; align-items: center; gap: 10px; padding: 6px 0; }
+    .row label { color: #45506180; color: #455061; }
+    .row input[type=range] { width: 100%; }
+    .row .val { text-align: right; color: #6b7787; font-variant-numeric: tabular-nums; }
+    .seg { display: inline-flex; border: 1px solid rgba(111,125,145,.25); border-radius: 8px; overflow: hidden; }
+    .seg button { flex: 1 1 0; min-width: 72px; text-align: center; border: 0; background: #fff; padding: 5px 12px; cursor: pointer; font: inherit; color: #455061; }
+    .seg button.active { background: #5d6ee8; color: #fff; }
+    .toggle { display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 6px 0; }
+    .switch { width: 42px; height: 24px; border-radius: 999px; background: #cfd6e0; position: relative; cursor: pointer; border: 0; transition: background .15s; }
+    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .15s; }
+    .switch.on { background: #2f9b7b; }
+    .switch.on::after { transform: translateX(18px); }
+    .num { display: grid; grid-template-columns: 1fr 72px; align-items: center; gap: 10px; padding: 5px 0; }
+    .num input { width: 72px; padding: 4px 6px; border: 1px solid rgba(111,125,145,.3); border-radius: 6px; font: inherit; }
+    .btn { border: 1px solid #5d6ee8; background: #5d6ee8; color: #fff; border-radius: 8px; padding: 5px 14px; font: inherit; cursor: pointer; }
+    .btn:hover { background: #4d5ed8; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .stat { background: #f6f8fb; border-radius: 8px; padding: 8px 10px; }
+    .stat b { display: block; font-size: 16px; }
+    .stat span { color: #6b7787; font-size: 11px; }
+    .muted { color: #93a0b2; font-size: 11px; margin-top: 8px; }
+    #status { position: fixed; right: 14px; bottom: 10px; font-size: 11px; color: #93a0b2; }
+    .shop-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+    .shop-exp { font-size: 12px; color: #6b7787; }
+    .shop-exp b { color: #5d6ee8; font-variant-numeric: tabular-nums; }
+    .shop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+    .shop-item { border: 1px solid rgba(111,125,145,.18); border-radius: 10px; padding: 10px 8px; text-align: center; background: #fafbfd; }
+    .shop-item.equipped { border-color: #2f9b7b; background: #f0faf6; }
+    .shop-emoji { font-size: 30px; line-height: 1.1; }
+    .shop-emoji.locked { filter: grayscale(1); opacity: .45; }
+    .shop-name { font-size: 12px; color: #455061; margin: 4px 0 8px; }
+    .shop-btn { width: 100%; border-radius: 7px; padding: 4px 0; font: inherit; font-size: 12px; cursor: pointer; border: 1px solid #5d6ee8; background: #5d6ee8; color: #fff; }
+    .shop-btn:hover { background: #4d5ed8; }
+    .shop-btn.ghost { background: #fff; color: #5d6ee8; }
+    .shop-btn.ghost:hover { background: #eef0fe; }
+    .shop-btn.off { border-color: #2f9b7b; background: #fff; color: #2f9b7b; }
+    .shop-btn:disabled { border-color: #cfd6e0; background: #f2f4f8; color: #aab3c0; cursor: not-allowed; }
+    .evo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 8px; align-items: end; }
+    .evo-item { text-align: center; padding: 8px 4px; border-radius: 10px; border: 1px solid transparent; }
+    .evo-item.current { border-color: #5d6ee8; background: #eef0fe; }
+    .evo-img { width: 100%; height: 56px; object-fit: contain; }
+    .evo-item.locked .evo-img { filter: grayscale(1); opacity: .4; }
+    .evo-label { font-size: 12px; color: #455061; margin-top: 4px; }
+    .evo-item.current .evo-label { color: #5d6ee8; font-weight: 600; }
+    .evo-lv { font-size: 10px; color: #93a0b2; }
+  </style>
+</head>
+<body>
+  <h1>🌳 Kodama 管理中心</h1>
+  <p class="sub">这些设置实时同步到桌宠。关掉本窗口不影响桌宠运行。</p>
+
+  <section class="card">
+    <h2>外观</h2>
+    <div class="row"><label>大小</label><input id="petScale" type="range" min="40" max="125" /><span class="val" id="petScaleV"></span></div>
+    <div class="row"><label>透明度</label><input id="petOpacity" type="range" min="25" max="100" /><span class="val" id="petOpacityV"></span></div>
+    <div class="row"><label>点击范围</label><input id="hitboxScale" type="range" min="25" max="100" /><span class="val" id="hitboxScaleV"></span></div>
+    <div class="row"><label>气泡高度</label><input id="bubbleAnchor" type="range" min="35" max="80" /><span class="val" id="bubbleAnchorV"></span></div>
+    <div class="row"><label>气泡间距</label><input id="bubbleGap" type="range" min="0" max="48" /><span class="val" id="bubbleGapV"></span></div>
+    <div class="row"><label>触发键</label><div class="seg" id="triggerMode"><button data-v="right">右键</button><button data-v="left">左键</button></div><span></span></div>
+    <div class="row"><label>贴边</label><div class="seg" id="edgeMode"><button data-v="half">半露</button><button data-v="inside">屏内</button></div><span></span></div>
+  </section>
+
+  <section class="card">
+    <h2>行为</h2>
+    <div class="toggle"><span>双击摸摸</span><button class="switch" id="pettingEnabled"></button></div>
+    <div class="toggle"><span>自动游走</span><button class="switch" id="wanderEnabled"></button></div>
+    <div class="toggle"><span>勿扰模式</span><button class="switch" id="dndMode"></button></div>
+    <div class="toggle"><span>声音</span><button class="switch" id="soundEnabled"></button></div>
+    <div class="toggle"><span>系统通知</span><button class="switch" id="notificationsEnabled"></button></div>
+    <div class="toggle"><span>语音播报 (TTS · macOS say)</span><button class="switch" id="ttsEnabled"></button></div>
+  </section>
+
+  <section class="card">
+    <h2>番茄钟（分钟）</h2>
+    <div class="num"><span>专注时长</span><input id="focusMinutes" type="number" min="1" max="180" /></div>
+    <div class="num"><span>短休</span><input id="shortBreakMinutes" type="number" min="1" max="60" /></div>
+    <div class="num"><span>长休</span><input id="longBreakMinutes" type="number" min="1" max="120" /></div>
+    <div class="num"><span>长休间隔（轮）</span><input id="longBreakEvery" type="number" min="1" max="12" /></div>
+    <div class="num"><span>久坐提醒（0=关）</span><input id="sedentaryMinutes" type="number" min="0" max="240" /></div>
+  </section>
+
+  <section class="card">
+    <h2>互动 / 成长</h2>
+    <div class="toggle"><span>摸摸桌宠（动作 + 气泡）</span><button id="petAction" class="btn">摸摸 🐾</button></div>
+    <div class="toggle"><span>主动投喂（消耗食物 → 换经验，可能升级变大）</span><button id="feedPet" class="btn">投喂 🍖</button></div>
+    <p class="muted">食物由 agent 使用<b>自动累积</b>（事件 + token 用量）；<b>投喂</b>把食物花成经验、攒满即升级，<b>等级越高桌宠越大</b>。基础配饰按等级解锁，在菜单栏托盘「配饰」佩戴；emoji 配饰可在下方<b>配饰商店</b>用经验购买。<br>（从蛋→幼崽→成年的多阶段皮肤是下一步——已确认有 CC0 免费素材可用，待挑选接入。）</p>
+  </section>
+
+  <section class="card" id="evoCard" style="display:none">
+    <h2>进化图鉴</h2>
+    <div class="evo-grid" id="evoGrid"></div>
+    <p class="muted" id="evoNote"></p>
+  </section>
+
+  <section class="card">
+    <div class="shop-head">
+      <h2 style="margin:0">配饰商店（emoji · 用经验购买）</h2>
+      <span class="shop-exp">可用经验 <b id="shopExp">–</b>⭐</span>
+    </div>
+    <div class="shop-grid" id="shopGrid"></div>
+    <p class="muted">购买后<b>自动佩戴</b>;每槽位(头/脸/徽章/光效)同时只戴一件。经验靠 agent 使用与<b>投喂</b>攒;经验不够时先上面「投喂 🍖」换点经验再买。配饰也会显示在桌宠身上和菜单栏托盘「配饰」里。</p>
+  </section>
+
+  <section class="card">
+    <h2>统计（只读）</h2>
+    <div class="stats">
+      <div class="stat"><b id="statLevel">–</b><span>等级</span></div>
+      <div class="stat"><b id="statFood">–</b><span>食物</span></div>
+      <div class="stat"><b id="statExp">–</b><span>经验</span></div>
+      <div class="stat"><b id="tokToday">–</b><span>今日 token</span></div>
+      <div class="stat"><b id="tok7">–</b><span>近 7 天</span></div>
+      <div class="stat"><b id="tokTotal">–</b><span>累计</span></div>
+    </div>
+    <p class="muted" id="tokSplit"></p>
+  </section>
+
+  <div id="status">就绪</div>
+  <script type="module" src="./manage.js"></script>
+</body>
+</html>
