@@ -5,7 +5,24 @@ import { PET_CONFIG } from './config/pet-config.js'
 import { initAccessoryLayer } from './accessories.js'
 import { ACCESSORIES, ACCESSORY_SLOTS } from './config/accessories.js'
 import { initGrowth, feed as feedGrowth, feedManually, growthScale, feedTokens, statusText, getState as getGrowthState, equipAccessory, unlockWithExp, configureAccessories } from './growth.js'
-import { eventAgentLabel, eventAppLabel, eventBubbleContext, eventProjectLabel, eventTaskLabel, eventWorkId } from './event-labels.js'
+import {
+  bridgeTaskShareRequestForEvent as buildBridgeTaskShareRequestForEvent,
+  eventActorLabel,
+  eventAgentLabel,
+  eventAppLabel,
+  eventBubbleContext,
+  eventCurrentText,
+  eventExplicitProjectLabel,
+  eventLarkReplyMergeKey,
+  eventSessionCacheKeys,
+  eventSessionTitle,
+  eventTaskLabel,
+  eventWorkdirLabel,
+  eventWorkId,
+  inferSessionIdFromTranscriptPath,
+  sessionRequestForEvent as buildSessionRequestForEvent,
+  targetForEvent as buildTargetForEvent,
+} from './event-labels.js'
 
 // Live2D model is chosen by `pnpm run setup <name>` (writes ./models/current-model.js).
 const FALLBACK_MODEL_URL = './models/wanko/Wanko.model3.json'
@@ -87,9 +104,11 @@ let bubbleSeq = 0
 const eventLog = []
 const bubbleLog = []
 const sessionPreviewCache = new Map()
+const sessionTitleCache = new Map()
 const pendingBubbleShares = new Set()
 const pendingSubagentShares = new Set()
 const MAX_EVENT_LOG = 40
+const MAX_SESSION_TITLE_CACHE = 200
 const MAX_TRANSIENT_BUBBLES = 6
 const MAX_PERSISTENT_BUBBLES = 120
 const PANEL_TABS = new Set(['settings', 'waiting', 'done', 'sessions', 'bridge', 'recent', 'config'])
@@ -1284,62 +1303,74 @@ function taskName(event) {
   return sourceLabel(event.source)
 }
 
+function trimSessionTitleCache() {
+  while (sessionTitleCache.size > MAX_SESSION_TITLE_CACHE) {
+    const oldest = sessionTitleCache.keys().next().value
+    if (!oldest) break
+    sessionTitleCache.delete(oldest)
+  }
+}
+
+function rememberSessionTitle(event) {
+  const title = eventSessionTitle(event)
+  if (!title) return
+  for (const key of eventSessionCacheKeys(event)) {
+    sessionTitleCache.delete(key)
+    sessionTitleCache.set(key, title)
+  }
+  trimSessionTitleCache()
+}
+
+function cachedSessionTitle(event) {
+  const direct = eventSessionTitle(event)
+  if (direct) return direct
+  for (const key of eventSessionCacheKeys(event)) {
+    const title = sessionTitleCache.get(key)
+    if (title) return title
+  }
+  return ''
+}
+
+function titleContains(base, title) {
+  const left = String(base || '').replace(/\s+/g, ' ').toLowerCase()
+  const right = String(title || '').replace(/\s+/g, ' ').toLowerCase()
+  return Boolean(right && left.includes(right))
+}
+
 function bubbleTitle(event) {
   if (!event) return 'Kodama'
-  return `${taskName(event)} · ${typeLabel(event.type)}`
-}
-
-function isCodexTranscriptPath(value) {
-  return /(^|\/)\.codex\/sessions\//.test(String(value || ''))
-}
-
-function isCodexInternalMemoryPath(value) {
-  return /(^|\/)\.codex\/memories(\/|$)/.test(String(value || '').replace(/\\/g, '/'))
-}
-
-function isClaudeTranscriptPath(value) {
-  return /(^|\/)\.claude\/projects\//.test(String(value || ''))
-}
-
-function inferSessionIdFromTranscriptPath(value) {
-  const file = String(value || '').split('/').pop() || ''
-  const uuid = file.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
-  return uuid?.[0] || ''
+  const actor = eventActorLabel(event)
+  const task = taskName(event)
+  const suffix = typeLabel(event.type)
+  const base = actor && task && actor !== task
+    ? `${actor} / ${task} · ${suffix}`
+    : actor
+      ? `${actor} · ${suffix}`
+      : `${task} · ${suffix}`
+  const sessionTitle = cachedSessionTitle(event)
+  return sessionTitle && !titleContains(base, sessionTitle) ? `${base}（${sessionTitle}）` : base
 }
 
 function sessionRequestForEvent(event) {
-  if (!event || event.source !== 'local') return null
-  const transcriptPath = event.transcriptPath || event.transcript_path || ''
-  const agentTranscriptPath = event.agentTranscriptPath || event.agent_transcript_path || ''
-  const sessionId = event.sessionId || event.session_id || inferSessionIdFromTranscriptPath(transcriptPath)
-  const threadId = event.threadId || event.thread_id || event['thread-id'] || ''
-  const client = String(event.client || event.originator || '').toLowerCase()
-  const cwd = event.cwd || event.projectDir || event.project_dir || event.workspacePath || event.workspace_path || ''
-  if (isCodexInternalMemoryPath(cwd) || isCodexInternalMemoryPath(transcriptPath) || isCodexInternalMemoryPath(agentTranscriptPath)) {
-    return null
-  }
-  // Trae/Coco hook payloads carry conversation ids, but Kodama does not have a
-  // reliable deep link or terminal jump for Trae Work sessions yet. Do not fall
-  // through to the generic "sessionId means Codex" branch, or Trae bubbles get
-  // the same unopenable Codex target that internal Codex tasks used to get.
-  if (client.includes('trae') || client.includes('coco')) return null
-  const provider = isClaudeTranscriptPath(transcriptPath) || isClaudeTranscriptPath(agentTranscriptPath) || client.includes('claude')
-    ? 'claude'
-    : isCodexTranscriptPath(transcriptPath) || client.includes('codex') || threadId || sessionId
-      ? 'codex'
-      : ''
-  const id = provider === 'codex' ? (threadId || sessionId) : sessionId
-  if (!provider || !id) return null
-  return {
-    provider,
-    sessionId: id,
-    threadId,
-    transcriptPath,
-    agentTranscriptPath,
-    cwd,
+  return buildSessionRequestForEvent(event, {
     bridgeUrl: activeAgentConfig.bridgeUrl || DEFAULT_BRIDGE_URL,
     token: activeAgentConfig.token || '',
-  }
+  })
+}
+
+function bridgeTaskShareRequestForEvent(event) {
+  return buildBridgeTaskShareRequestForEvent(event, {
+    bridgeUrl: activeAgentConfig.bridgeUrl || DEFAULT_BRIDGE_URL,
+    token: activeAgentConfig.token || '',
+  })
+}
+
+function bubbleShareTargetForEvent(event) {
+  const sessionRequest = sessionRequestForEvent(event)
+  if (sessionRequest) return { kind: 'session', request: sessionRequest }
+  const bridgeRequest = bridgeTaskShareRequestForEvent(event)
+  if (bridgeRequest) return { kind: 'bridge-task', request: bridgeRequest }
+  return null
 }
 
 function shouldPersistBubble(event) {
@@ -1348,6 +1379,8 @@ function shouldPersistBubble(event) {
 
 function bubbleMergeKey(event) {
   if (!event?.type) return ''
+  const larkReplyKey = eventLarkReplyMergeKey(event)
+  if (larkReplyKey) return larkReplyKey
   if (!new Set(['task_started', 'task_progress', 'task_waiting', 'task_done', 'task_failed']).has(event.type)) {
     return ''
   }
@@ -1451,11 +1484,15 @@ function renderBubbles() {
 }
 
 function bubbleShareButtonHtml(item, actionsCoolingDown = false) {
-  if (!sessionRequestForEvent(item.event)) return ''
+  const target = bubbleShareTargetForEvent(item.event)
+  if (!target) return ''
   const pending = pendingBubbleShares.has(item.id)
+  const title = target.kind === 'bridge-task'
+    ? '生成机器人过程分享链接'
+    : '生成会话分享链接'
   return [
     `<button type="button" data-share-bubble="${escapeHtml(item.id)}"`,
-    ` title="${pending ? '正在生成会话分享链接' : '生成会话分享链接'}"`,
+    ` title="${pending ? '正在生成分享链接' : title}"`,
     pending || actionsCoolingDown ? ' disabled aria-busy="true"' : '',
     `>${pending ? '分享中...' : '分享'}</button>`,
   ].join('')
@@ -1491,15 +1528,53 @@ function shortText(text, max = 82) {
   return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized
 }
 
+function normalizedHoverKey(text) {
+  return String(text || '')
+    .replace(/^(?:最新|当前|任务|会话|你|Agent|机器人|Assistant|User)\s*[:：]\s*/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function pushHoverText(rows, seen, text, options = {}) {
+  const line = shortText(text, options.max || 82)
+  const key = normalizedHoverKey(line)
+  if (!key || seen.has(key)) return false
+  seen.add(key)
+  rows.push(`<div class="bubble-hover-text">${escapeHtml(line)}</div>`)
+  return true
+}
+
+function stalePromptPreviewLine(line, event, currentText) {
+  if (!currentText || !event?.prompt) return false
+  const text = String(line || '').trim()
+  if (!/^(?:你|User)\s*[:：]/iu.test(text)) return false
+  const prompt = normalizedHoverKey(event.prompt)
+  if (!prompt) return false
+  const current = normalizedHoverKey(currentText)
+  if (current && current.includes(prompt)) return false
+  return normalizedHoverKey(text).includes(prompt)
+}
+
+function addPreviewHoverLines(rows, seen, item, currentText, maxLines) {
+  let added = 0
+  for (const line of [...(item.preview?.lines || [])].reverse()) {
+    if (stalePromptPreviewLine(line, item.event, currentText)) continue
+    if (pushHoverText(rows, seen, line, { max: 82 })) added += 1
+    if (added >= maxLines) break
+  }
+}
+
 function bubbleHoverHtml(item) {
+  const currentText = eventCurrentText(item.event, item.text, 96)
+  const seen = new Set()
   const preview = item.preview
   if (preview?.ok) {
     const rows = [
-      `<div class="bubble-hover-title">${escapeHtml(preview.title || item.title)}</div>`,
+      `<div class="bubble-hover-title">${escapeHtml(item.title || preview.title)}</div>`,
     ]
-    for (const line of (preview.lines || []).slice(-2)) {
-      rows.push(`<div class="bubble-hover-text">${escapeHtml(shortText(line, 74))}</div>`)
-    }
+    pushHoverText(rows, seen, currentText ? `最新：${currentText}` : '', { max: 96 })
+    addPreviewHoverLines(rows, seen, item, currentText, currentText ? 1 : 2)
     return rows.join('')
   }
   if (preview?.loading) {
@@ -1517,18 +1592,24 @@ function bubbleHoverHtml(item) {
   const rows = [
     `<div class="bubble-hover-title">${escapeHtml(item.title)}</div>`,
   ]
-  if (item.event?.title) rows.push(`<div class="bubble-hover-text">任务：${escapeHtml(shortText(item.event.title, 74))}</div>`)
-  if (item.event?.prompt && item.event.prompt !== item.event?.title) {
-    rows.push(`<div class="bubble-hover-text">你：${escapeHtml(shortText(item.event.prompt, 74))}</div>`)
+  pushHoverText(rows, seen, currentText ? `最新：${currentText}` : '', { max: 96 })
+  if (!currentText && item.event?.title) {
+    pushHoverText(rows, seen, `任务：${item.event.title}`, { max: 82 })
   }
-  rows.push(`<div class="bubble-hover-text">${escapeHtml(shortText(item.text, 74))}</div>`)
+  if (!currentText && item.event?.prompt && item.event.prompt !== item.event?.title) {
+    pushHoverText(rows, seen, `会话：${item.event.prompt}`, { max: 82 })
+  }
+  const actorLabel = eventActorLabel(item.event)
   const appLabel = eventAppLabel(item.event)
   const agentLabel = eventAgentLabel(item.event)
-  const projectLabel = eventProjectLabel(item.event)
+  const projectLabel = eventExplicitProjectLabel(item.event)
+  const workdirLabel = eventWorkdirLabel(item.event)
   const workId = eventWorkId(item.event)
+  if (actorLabel) rows.push(`<div class="bubble-hover-meta">来源：${escapeHtml(actorLabel)}</div>`)
   if (appLabel) rows.push(`<div class="bubble-hover-meta">App：${escapeHtml(appLabel)}</div>`)
   if (agentLabel && agentLabel !== appLabel) rows.push(`<div class="bubble-hover-meta">Agent：${escapeHtml(agentLabel)}</div>`)
   if (projectLabel) rows.push(`<div class="bubble-hover-meta">项目：${escapeHtml(projectLabel)}</div>`)
+  if (workdirLabel && workdirLabel !== projectLabel) rows.push(`<div class="bubble-hover-meta">工作目录：${escapeHtml(workdirLabel)}</div>`)
   if (workId) rows.push(`<div class="bubble-hover-meta">Work ID：${escapeHtml(shortText(workId, 18))}</div>`)
   return rows.join('')
 }
@@ -1571,18 +1652,23 @@ function previewKey(request) {
 // Build a hover summary from the event alone — used when no transcript file is
 // available (Codex `agent-turn-complete` notify carries the prompt + result but
 // no transcript path, so the file-read preview always failed before).
-function localPreviewFromEvent(event) {
+function localPreviewFromEvent(event, fallbackText = '') {
   const lines = []
+  const currentText = eventCurrentText(event, fallbackText, 96)
+  const actorLabel = eventActorLabel(event)
   const appLabel = eventAppLabel(event)
   const agentLabel = eventAgentLabel(event)
-  const projectLabel = eventProjectLabel(event)
+  const projectLabel = eventExplicitProjectLabel(event)
+  const workdirLabel = eventWorkdirLabel(event)
   const workId = eventWorkId(event)
+  if (currentText) lines.push(`最新: ${currentText}`)
+  if (actorLabel) lines.push(`来源: ${actorLabel}`)
   if (appLabel) lines.push(`App: ${appLabel}`)
   if (agentLabel && agentLabel !== appLabel) lines.push(`Agent: ${agentLabel}`)
   if (projectLabel) lines.push(`项目: ${projectLabel}`)
+  if (workdirLabel && workdirLabel !== projectLabel) lines.push(`工作目录: ${workdirLabel}`)
   if (workId) lines.push(`Work ID: ${shortText(workId, 18)}`)
-  if (event?.prompt) lines.push(`你: ${shortText(event.prompt, 74)}`)
-  if (event?.text) lines.push(`Agent: ${shortText(event.text, 74)}`)
+  if (!currentText && event?.prompt) lines.push(`会话: ${shortText(event.prompt, 74)}`)
   if (!lines.length) return { ok: false, error: '这条事件没有可显示的摘要' }
   return { ok: true, title: bubbleTitle(event), lines }
 }
@@ -1592,7 +1678,7 @@ async function ensureBubblePreview(item, event, anchor) {
   if (!request || item.preview?.ok || item.preview?.loading) return
   // No transcript on disk → synthesize from the event (avoids missing-transcript-path).
   if (!request.transcriptPath && !request.agentTranscriptPath) {
-    item.preview = localPreviewFromEvent(item.event)
+    item.preview = localPreviewFromEvent(item.event, item.text)
     return
   }
   const key = previewKey(request)
@@ -1920,6 +2006,7 @@ function togglePanel(force) {
 
 function recordAgentEvent(event) {
   if (!event || !event.type) return
+  rememberSessionTitle(event)
   const record = {
     ...event,
     id: String(++eventSeq),
@@ -1932,43 +2019,10 @@ function recordAgentEvent(event) {
 }
 
 function targetForEvent(event) {
-  if (!event) return null
-  const url = event.url || event.link || event.deepLink || event.deep_link || ''
-  if (url) return { kind: 'url', url, label: '打开链接' }
-  const chatId = event.chatId || event.chat_id || ''
-  if (chatId) {
-    const messageId = event.messageId || event.message_id || ''
-    return {
-      kind: 'lark',
-      chatId,
-      messageId,
-      label: messageId ? `飞书消息 ${messageId}` : `飞书会话 ${chatId}`,
-    }
-  }
-  const session = sessionRequestForEvent(event)
-  if (session) {
-    if (session.provider === 'codex') {
-      return {
-        kind: 'codex-thread',
-        threadId: session.sessionId,
-        turnId: event.turnId || event.turn_id || event['turn-id'] || '',
-        url: `codex://threads/${encodeURIComponent(session.sessionId)}`,
-        label: '打开 Codex 会话',
-        fallbackPath: session.transcriptPath,
-      }
-    }
-    if (session.provider === 'claude') {
-      return {
-        kind: 'terminal-session',
-        sessionId: session.sessionId,
-        tty: event.tty || '',
-        cwd: session.cwd,
-        label: '打开 Claude Code 终端',
-        fallbackPath: session.transcriptPath,
-      }
-    }
-  }
-  return null
+  return buildTargetForEvent(event, {
+    bridgeUrl: activeAgentConfig.bridgeUrl || DEFAULT_BRIDGE_URL,
+    token: activeAgentConfig.token || '',
+  })
 }
 
 function targetKey(target) {
@@ -2056,22 +2110,25 @@ async function shareBubbleSession(id) {
   const bubbleId = String(id)
   if (pendingBubbleShares.has(bubbleId)) return
   const item = bubbleLog.find(record => record.id === bubbleId)
-  const request = sessionRequestForEvent(item?.event)
-  if (!request) {
-    say('这条气泡没有可分享的会话信息', 2400)
+  const target = bubbleShareTargetForEvent(item?.event)
+  if (!target) {
+    say('这条气泡没有可分享的过程信息', 2400)
     return
   }
   pendingBubbleShares.add(bubbleId)
   renderBubbles()
-  say('正在生成会话分享链接...', 2200)
+  say(target.kind === 'bridge-task' ? '正在生成机器人过程分享链接...' : '正在生成会话分享链接...', 2200)
   try {
-    const result = await window.pet.shareSession?.(request)
+    const result = target.kind === 'bridge-task'
+      ? await window.pet.shareBridgeTasks?.(target.request)
+      : await window.pet.shareSession?.(target.request)
     if (!result?.ok) {
       say(`分享失败：${result?.error || 'bridge 没返回链接'}`, 4200)
       return
     }
     const url = result.url || result.share?.url
-    notifyShareReady(url ? `分享链接已复制到剪贴板：${url}` : '分享链接已生成，已复制到剪贴板')
+    const label = target.kind === 'bridge-task' ? '机器人过程分享链接' : '分享链接'
+    notifyShareReady(url ? `${label}已复制到剪贴板：${url}` : `${label}已生成，已复制到剪贴板`)
   } catch (error) {
     say(`分享失败：${error?.message || error}`, 4200)
   } finally {

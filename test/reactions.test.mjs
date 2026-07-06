@@ -22,6 +22,30 @@ test('lark task_done renders a 💬-prefixed bubble with the summary', () => {
   assert.deepEqual(out.status, ['done'])
 })
 
+test('lark_message_received is silent because Feishu already notifies mentions', () => {
+  const out = collect({ type: 'lark_message_received', source: 'lark', text: '有人喊我' })
+  assert.deepEqual(out.says, [])
+  assert.deepEqual(out.status, [])
+  assert.deepEqual(out.motions, [])
+})
+
+test('lark_reply_sent defaults to the bot own reply copy', () => {
+  const out = collect({ type: 'lark_reply_sent', source: 'lark', text: '执行失败' })
+  assert.equal(out.says.length, 1)
+  assert.match(out.says[0], /菌子回复：执行失败/)
+  assert.doesNotMatch(out.says[0], /替你/)
+  assert.doesNotMatch(out.says[0], /回了飞书/)
+  assert.deepEqual(out.status, ['replying'])
+})
+
+test('delegated lark_reply_sent keeps the user proxy copy', () => {
+  const out = collect({ type: 'lark_reply_sent', source: 'lark', text: '我稍后处理', delegated: true })
+  assert.equal(out.says.length, 1)
+  assert.match(out.says[0], /我刚替你回复：我稍后处理/)
+  assert.doesNotMatch(out.says[0], /回了飞书/)
+  assert.deepEqual(out.status, ['replying'])
+})
+
 test('local source uses the 💻 prefix', () => {
   const out = collect({ type: 'task_done', source: 'local', text: '' })
   assert.match(out.says[0], /💻/)
@@ -67,6 +91,10 @@ test('unknown event type is ignored', () => {
 
 test('every configured event has a bubble template', () => {
   for (const [type, def] of Object.entries(PET_CONFIG.events)) {
-    assert.ok(typeof def.bubble === 'string' && def.bubble.length, `${type} missing bubble`)
+    if (def.silent) {
+      assert.equal(def.bubble || '', '', `${type} silent events should not define a visible bubble`)
+    } else {
+      assert.ok(typeof def.bubble === 'string' && def.bubble.length, `${type} missing bubble`)
+    }
   }
 })
