@@ -3,7 +3,7 @@ import { connectAgentSync, DEFAULT_BRIDGE_URL } from './agent-sync.js'
 import { reactToEvent } from './reactions.js'
 import { PET_CONFIG } from './config/pet-config.js'
 import { initAccessoryLayer } from './accessories.js'
-import { pickDisplayArea } from './display-area.js'
+import { pickDisplayArea, areasToWindowRects } from './display-area.js'
 import { ACCESSORIES, ACCESSORY_SLOTS } from './config/accessories.js'
 import { initGrowth, feed as feedGrowth, feedManually, growthScale, feedTokens, statusText, getState as getGrowthState, equipAccessory, unlockWithExp, configureAccessories } from './growth.js'
 import {
@@ -1022,18 +1022,15 @@ function applyDisplayAreaSnapshot(snapshot) {
 // origin main provided, not window.screenX/screenY, which can lag a move) and
 // pick the one containing/nearest the pet's anchor point. Null until the
 // first snapshot arrives — callers fall back to viewportVisibleArea().
+// areasToWindowRects also corrects the CSS-px/DIP scale drift that mixed-DPI
+// display sets cause (a scaled main display skews the overlay's CSS units).
 function displayAreaForPoint(point) {
   if (!point || !displayAreaSnapshot) return null
-  const { origin, areas } = displayAreaSnapshot
-  if (!Number.isFinite(origin.x) || !Number.isFinite(origin.y)) return null
-  const local = areas
-    .filter(area => Number.isFinite(area?.x) && Number.isFinite(area?.y))
-    .map(area => ({
-      left: Math.max(0, area.x - origin.x),
-      top: Math.max(0, area.y - origin.y),
-      right: Math.min(window.innerWidth, area.x - origin.x + Math.max(0, area.width || 0)),
-      bottom: Math.min(window.innerHeight, area.y - origin.y + Math.max(0, area.height || 0)),
-    }))
+  const { origin, window: windowSize, areas } = displayAreaSnapshot
+  const local = areasToWindowRects(areas, origin, windowSize, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  })
   return pickDisplayArea(local, point, null)
 }
 

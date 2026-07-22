@@ -53,3 +53,25 @@ export function pickDisplayArea(areas, point, fallbackArea) {
   }
   return nearest
 }
+
+// Translate main-process work areas (screen DIPs, {x,y,width,height}) into
+// window CSS-px rects ({left,top,right,bottom}). On mixed-DPI setups (e.g. a
+// scaled Retina main display plus a 2x external) Chromium lays the overlay
+// out at a devicePixelRatio inherited from one display, so 1 CSS px != 1 DIP:
+// the measured ratio viewport/windowSize corrects for that. Areas are clipped
+// to the viewport; degenerate results are dropped.
+export function areasToWindowRects(areas, origin, windowSize, viewport) {
+  if (!origin || !Number.isFinite(origin.x) || !Number.isFinite(origin.y)) return []
+  if (!viewport || !(viewport.width > 0) || !(viewport.height > 0)) return []
+  const sx = windowSize?.width > 0 ? viewport.width / windowSize.width : 1
+  const sy = windowSize?.height > 0 ? viewport.height / windowSize.height : 1
+  return (Array.isArray(areas) ? areas : [])
+    .filter(area => Number.isFinite(area?.x) && Number.isFinite(area?.y))
+    .map(area => ({
+      left: Math.max(0, (area.x - origin.x) * sx),
+      top: Math.max(0, (area.y - origin.y) * sy),
+      right: Math.min(viewport.width, (area.x - origin.x + Math.max(0, area.width || 0)) * sx),
+      bottom: Math.min(viewport.height, (area.y - origin.y + Math.max(0, area.height || 0)) * sy),
+    }))
+    .filter(rect => rect.right - rect.left > 0 && rect.bottom - rect.top > 0)
+}

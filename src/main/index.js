@@ -94,22 +94,29 @@ function combinedWorkAreaBounds(displays = screen.getAllDisplays()) {
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
-// Per-display work areas (screen coords) + the overlay window's origin. The
-// renderer positions floating elements in window coords, so it needs the
-// origin to translate these work areas and pick the display the pet sits on.
+// Per-display work areas (screen coords) + the overlay window's origin and
+// size. The renderer positions floating elements in window coords, so it
+// needs the origin to translate these work areas and pick the display the
+// pet sits on. The window size matters because on mixed-DPI setups (e.g. a
+// scaled Retina main display + a 2x external) Chromium's CSS px do not map
+// 1:1 onto screen DIPs — the renderer derives the scale from
+// innerWidth/window.width.
 function displayAreaSnapshot() {
   const areas = screen.getAllDisplays()
     .map(display => display?.workArea)
     .filter(area => area && Number.isFinite(area.x) && Number.isFinite(area.y) && area.width > 0 && area.height > 0)
   let origin
+  let windowSize
   if (win && !win.isDestroyed()) {
     const bounds = win.getBounds()
     origin = { x: bounds.x, y: bounds.y }
+    windowSize = { width: bounds.width, height: bounds.height }
   } else {
     const workArea = combinedWorkAreaBounds()
     origin = { x: workArea.x, y: workArea.y }
+    windowSize = { width: workArea.width, height: workArea.height }
   }
-  return { origin, areas }
+  return { origin, window: windowSize, areas }
 }
 
 function sendDisplayAreasToPet() {
