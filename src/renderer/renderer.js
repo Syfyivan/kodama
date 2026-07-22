@@ -3,6 +3,7 @@ import { connectAgentSync, DEFAULT_BRIDGE_URL } from './agent-sync.js'
 import { reactToEvent } from './reactions.js'
 import { PET_CONFIG } from './config/pet-config.js'
 import { initAccessoryLayer } from './accessories.js'
+import { pickDisplayArea } from './display-area.js'
 import { ACCESSORIES, ACCESSORY_SLOTS } from './config/accessories.js'
 import { initGrowth, feed as feedGrowth, feedManually, growthScale, feedTokens, statusText, getState as getGrowthState, equipAccessory, unlockWithExp, configureAccessories } from './growth.js'
 import {
@@ -370,6 +371,10 @@ async function init() {
       saveUiSettings()
       applyUiSettings()
     })
+    // Multi-monitor bubble placement: fetch the per-display work areas once,
+    // then keep the cache fresh from main's push (display/window changes).
+    window.pet.displayAreas?.().then(applyDisplayAreaSnapshot).catch(() => {})
+    window.pet.onDisplayAreasChanged?.(applyDisplayAreaSnapshot)
     accessoryLayer = initAccessoryLayer(() => backend?.getBounds?.(), { accessories: activeAccessories })
     applyUiSettings()
     loadPomodoroSettings()
@@ -1001,8 +1006,38 @@ function viewportVisibleArea() {
   return area
 }
 
-function clampElementToVisibleArea(left, top, width, height, padding = FLOATING_PADDING) {
-  const area = viewportVisibleArea()
+// Per-display work areas + the overlay window's origin, pushed by the main
+// process (fetched once at startup, then kept fresh via pet:display-areas-changed).
+// viewportVisibleArea() only describes ONE display, so near-pet elements use
+// this to follow the pet across monitors.
+let displayAreaSnapshot = null
+
+function applyDisplayAreaSnapshot(snapshot) {
+  if (!snapshot || !snapshot.origin || !Array.isArray(snapshot.areas)) return
+  displayAreaSnapshot = snapshot
+  scheduleFloatingLayout() // the picked display may have changed
+}
+
+// Convert the cached screen-coord work areas into window coords (via the
+// origin main provided, not window.screenX/screenY, which can lag a move) and
+// pick the one containing/nearest the pet's anchor point. Null until the
+// first snapshot arrives — callers fall back to viewportVisibleArea().
+function displayAreaForPoint(point) {
+  if (!point || !displayAreaSnapshot) return null
+  const { origin, areas } = displayAreaSnapshot
+  if (!Number.isFinite(origin.x) || !Number.isFinite(origin.y)) return null
+  const local = areas
+    .filter(area => Number.isFinite(area?.x) && Number.isFinite(area?.y))
+    .map(area => ({
+      left: Math.max(0, area.x - origin.x),
+      top: Math.max(0, area.y - origin.y),
+      right: Math.min(window.innerWidth, area.x - origin.x + Math.max(0, area.width || 0)),
+      bottom: Math.min(window.innerHeight, area.y - origin.y + Math.max(0, area.height || 0)),
+    }))
+  return pickDisplayArea(local, point, null)
+}
+
+function clampElementToVisibleArea(left, top, width, height, padding = FLOATING_PADDING, area = viewportVisibleArea()) {
   const minLeft = area.left + padding
   const maxLeft = area.right - width - padding
   const minTop = area.top + padding
@@ -1013,8 +1048,7 @@ function clampElementToVisibleArea(left, top, width, height, padding = FLOATING_
   }
 }
 
-function prepareFloatingElement(el, preferredWidth, fallbackHeight, padding = FLOATING_PADDING) {
-  const area = viewportVisibleArea()
+function prepareFloatingElement(el, preferredWidth, fallbackHeight, padding = FLOATING_PADDING, area = viewportVisibleArea()) {
   const availableWidth = Math.max(44, Math.floor(area.right - area.left - padding * 2))
   const availableHeight = Math.max(44, Math.floor(area.bottom - area.top - padding * 2))
   const width = Math.min(preferredWidth, availableWidth)
@@ -1136,11 +1170,22 @@ function setElementCorner(el, corner, fallbackWidth, fallbackHeight) {
 
 function positionNearPet(el, fallbackWidth, fallbackHeight) {
   const pet = petBounds()
-  const { width, height, naturalHeight, area, padding } = prepareFloatingElement(el, fallbackWidth, fallbackHeight)
   if (!pet) {
     setElementCorner(el, 'top-right', fallbackWidth, fallbackHeight)
     return
   }
+  // The overlay spans every display, but viewportVisibleArea() describes just
+  // one — so a pet on a second monitor would leave the bubble stranded on the
+  // primary display. Anchor to the work area of the display the pet is
+  // actually on (falling back to the viewport area until main's snapshot arrives).
+  const petAnchor = {
+    x: pet.x + pet.width / 2,
+    y: pet.y + pet.height * (uiSettings.bubbleAnchor / 100),
+  }
+  const petDisplayArea = displayAreaForPoint(petAnchor)
+  const { width, height, naturalHeight, area, padding } = prepareFloatingElement(
+    el, fallbackWidth, fallbackHeight, FLOATING_PADDING, petDisplayArea || viewportVisibleArea(),
+  )
   // Live2D bounds carry a lot of transparent padding, so snuggling against the
   // raw bounds leaves a big visible gap. Anchor the bubble to a centered visible
   // core instead, and keep the gap well under half the pet width.
@@ -1259,7 +1304,7 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
     { left: anchorX - width, top: pet.y + pet.height + gap, side: 'left', vertical: 'bottom' },
     { left: anchorX, top: pet.y + pet.height + gap, side: 'right', vertical: 'bottom' },
   ].map((candidate) => {
-    const next = clampElementToVisibleArea(candidate.left, candidate.top, width, height, padding)
+    const next = clampElementToVisibleArea(candidate.left, candidate.top, width, height, padding, area)
     const placed = { left: next.left, top: next.top, right: next.left + width, bottom: next.top + height, width, height }
     const overlap = rectArea(rectIntersection(placed, visiblePet))
     return {
@@ -1267,7 +1312,7 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
       score: -overlap * 20 - ((next.left - candidate.left) ** 2 + (next.top - candidate.top) ** 2) * 0.02,
     }
   }).sort((a, b) => b.score - a.score)
-  const next = fallbackCandidates[0] || clampElementToVisibleArea(area.right - width - padding, area.bottom - height - padding, width, height, padding)
+  const next = fallbackCandidates[0] || clampElementToVisibleArea(area.right - width - padding, area.bottom - height - padding, width, height, padding, area)
   el.style.transform = 'none'
   el.style.left = `${next.left}px`
   el.style.top = `${next.top}px`

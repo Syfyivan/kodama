@@ -58,4 +58,7 @@ contextBridge.exposeInMainWorld('pet', {
   getUiSettings: () => ipcRenderer.invoke('pet:get-ui-settings'),
   patchUiSettings: (patch) => ipcRenderer.send('pet:patch-ui-settings', patch),
   openManageWindow: () => ipcRenderer.invoke('pet:open-manage-window'),
+  // per-display work areas + overlay origin (multi-monitor bubble placement)
+  displayAreas: () => ipcRenderer.invoke('pet:get-display-areas'),
+  onDisplayAreasChanged: (cb) => ipcRenderer.on('pet:display-areas-changed', (_e, snapshot) => cb(snapshot)),
 })

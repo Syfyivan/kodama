@@ -35,6 +35,7 @@ const ESM = [
   'src/renderer/accessories.js',
   'src/renderer/reactions.js',
   'src/renderer/growth.js',
+  'src/renderer/display-area.js',
   'src/renderer/config/accessories.js',
   'src/renderer/backends/gif.js',
   'src/renderer/config/pet-config.js',

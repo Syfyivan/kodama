@@ -94,6 +94,28 @@ function combinedWorkAreaBounds(displays = screen.getAllDisplays()) {
   return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
+// Per-display work areas (screen coords) + the overlay window's origin. The
+// renderer positions floating elements in window coords, so it needs the
+// origin to translate these work areas and pick the display the pet sits on.
+function displayAreaSnapshot() {
+  const areas = screen.getAllDisplays()
+    .map(display => display?.workArea)
+    .filter(area => area && Number.isFinite(area.x) && Number.isFinite(area.y) && area.width > 0 && area.height > 0)
+  let origin
+  if (win && !win.isDestroyed()) {
+    const bounds = win.getBounds()
+    origin = { x: bounds.x, y: bounds.y }
+  } else {
+    const workArea = combinedWorkAreaBounds()
+    origin = { x: workArea.x, y: workArea.y }
+  }
+  return { origin, areas }
+}
+
+function sendDisplayAreasToPet() {
+  sendToPet('pet:display-areas-changed', displayAreaSnapshot())
+}
+
 function createWindow() {
   const workArea = combinedWorkAreaBounds()
 
@@ -139,6 +161,9 @@ function createWindow() {
   win.on('show', scheduleTopmostReassert)
   win.on('focus', scheduleTopmostReassert)
   win.on('blur', scheduleTopmostReassert)
+  // Fresh window (re)load: the renderer caches the display work areas, so push
+  // a snapshot once it can receive one (it also pulls via pet:get-display-areas).
+  win.webContents.once('did-finish-load', sendDisplayAreasToPet)
 
   // Uncomment while debugging:
   // win.webContents.openDevTools({ mode: 'detach' })
@@ -593,6 +618,9 @@ function fitWindowToWorkArea() {
   if (!win || win.isDestroyed()) return
   const workArea = combinedWorkAreaBounds()
   win.setBounds({ x: workArea.x, y: workArea.y, width: workArea.width, height: workArea.height })
+  // The renderer caches per-display work areas + the window origin; both may
+  // have just changed, so keep its cache fresh.
+  sendDisplayAreasToPet()
 }
 
 // renderer -> main: toggle click-through
@@ -612,11 +640,16 @@ ipcMain.on('pet:move', (e, dx, dy, visibleBounds) => {
   const next = clampWindowByVisibleBounds(nextBounds, visibleBounds, display.workArea)
   w.setPosition(next.x, next.y)
   saveWindowState()
+  sendDisplayAreasToPet() // origin moved; keep the renderer's area cache fresh
 })
 
 ipcMain.on('pet:set-window-size', () => {
   // No-op: the overlay spans the full work area now; pet size is a renderer scale.
 })
+
+// Per-display work areas + overlay origin, so the renderer can place floating
+// elements on the display the pet actually sits on (not just the primary one).
+ipcMain.handle('pet:get-display-areas', () => displayAreaSnapshot())
 
 // Management window <-> pet renderer ui-settings sync, brokered by main.
 ipcMain.on('pet:report-ui-settings', (_e, settings) => {
