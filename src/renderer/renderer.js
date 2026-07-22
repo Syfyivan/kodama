@@ -3,9 +3,39 @@ import { connectAgentSync, DEFAULT_BRIDGE_URL } from './agent-sync.js'
 import { reactToEvent } from './reactions.js'
 import { PET_CONFIG } from './config/pet-config.js'
 import { initAccessoryLayer } from './accessories.js'
+import { welcomeCopyForGrowth } from './onboarding.js'
+import { tokenTotalWhenReady } from './token-feed.js'
+import { scaledHitboxSize } from './pet-hitbox.js'
 import { pickDisplayArea, areasToWindowRects } from './display-area.js'
+import { anchoredConfirmRect } from './appearance-confirm.js'
 import { ACCESSORIES, ACCESSORY_SLOTS } from './config/accessories.js'
-import { initGrowth, feed as feedGrowth, feedManually, growthScale, feedTokens, statusText, getState as getGrowthState, equipAccessory, unlockWithExp, configureAccessories } from './growth.js'
+import {
+  DEFAULT_PET_FAMILY_ID,
+  DEFAULT_PET_RENDER,
+  PET_FAMILIES,
+  petFamilyById,
+} from './config/appearance.js'
+import {
+  clampPetScale,
+  UI_SETTINGS_VERSION,
+  uiSettingsSourceForVersion,
+} from './config/ui-settings.js'
+import {
+  appearanceState,
+  configureAccessories,
+  equipAccessory,
+  feedManually,
+  feedTokens,
+  getState as getGrowthState,
+  growthScale,
+  initGrowth,
+  resetGrowth,
+  selectGrowthStage,
+  selectSkin,
+  statusText,
+  unequipAccessory,
+  unlockWithExp,
+} from './growth.js'
 import {
   bridgeTaskShareRequestForEvent as buildBridgeTaskShareRequestForEvent,
   eventActorLabel,
@@ -21,6 +51,7 @@ import {
   eventWorkdirLabel,
   eventWorkId,
   inferSessionIdFromTranscriptPath,
+  isLarkBridgeAgentEvent,
   sessionRequestForEvent as buildSessionRequestForEvent,
   targetForEvent as buildTargetForEvent,
 } from './event-labels.js'
@@ -35,9 +66,41 @@ const panelStatus = document.getElementById('panel-status')
 const waitingEvents = document.getElementById('waiting-events')
 const doneEvents = document.getElementById('done-events')
 const sessionEvents = document.getElementById('session-events')
+const larkInboxEvents = document.getElementById('lark-inbox-events')
+const larkInboxRefresh = document.getElementById('lark-inbox-refresh')
+const larkInboxSummary = document.getElementById('lark-inbox-summary')
+const larkWebPushOpen = document.getElementById('lark-web-push-open')
+const larkWebPushReload = document.getElementById('lark-web-push-reload')
+const larkBaseOpen = document.getElementById('lark-base-open')
 const recentEvents = document.getElementById('recent-events')
 const configEvents = document.getElementById('config-events')
 const panelTabs = document.getElementById('panel-tabs')
+const appearancePanel = document.getElementById('appearance-panel')
+const appearanceStageName = document.getElementById('appearance-stage-name')
+const appearanceStageCopy = document.getElementById('appearance-stage-copy')
+const appearanceLevel = document.getElementById('appearance-level')
+const appearanceProgressBar = document.getElementById('appearance-progress-bar')
+const appearanceProgressLabel = document.getElementById('appearance-progress-label')
+const growthJourneyCard = document.getElementById('growth-journey-card')
+const growthJourneyBadge = document.getElementById('growth-journey-badge')
+const growthJourneyTitle = document.getElementById('growth-journey-title')
+const growthJourneyCopy = document.getElementById('growth-journey-copy')
+const growthJourneyBar = document.getElementById('growth-journey-bar')
+const growthJourneyProgress = document.getElementById('growth-journey-progress')
+const growthTokenProgress = document.getElementById('growth-token-progress')
+const appearanceConfirm = document.getElementById('appearance-confirm')
+const appearanceConfirmCard = document.getElementById('appearance-confirm-card')
+const appearanceConfirmTitle = document.getElementById('appearance-confirm-title')
+const appearanceConfirmCopy = document.getElementById('appearance-confirm-copy')
+const appearanceConfirmCancel = document.getElementById('appearance-confirm-cancel')
+const appearanceConfirmAccept = document.getElementById('appearance-confirm-accept')
+const petFamilyOptions = document.getElementById('pet-family-options')
+const growthStageOptions = document.getElementById('growth-stage-options')
+const customStyleOptions = document.getElementById('custom-style-options')
+const customStyleUpload = document.getElementById('custom-style-upload')
+const skinOptions = document.getElementById('skin-options')
+const outfitOptions = document.getElementById('outfit-options')
+const appearanceFeed = document.getElementById('appearance-feed')
 const panelHeader = document.querySelector('.panel-header')
 const panelClose = document.getElementById('event-panel-close')
 const bridgeTasksOpen = document.getElementById('bridge-tasks-open')
@@ -49,6 +112,7 @@ const bridgeTasksSummary = document.getElementById('bridge-tasks-summary')
 const bridgeTasksList = document.getElementById('bridge-tasks-list')
 const metricWaiting = document.getElementById('metric-waiting')
 const metricDone = document.getElementById('metric-done')
+const metricInbox = document.getElementById('metric-inbox')
 const metricTotal = document.getElementById('metric-total')
 const settingPetScale = document.getElementById('setting-pet-scale')
 const settingPetScaleValue = document.getElementById('setting-pet-scale-value')
@@ -98,8 +162,14 @@ let activeAgentConfig = { bridgeUrl: DEFAULT_BRIDGE_URL }
 let disposeAgentSync = null
 let activeAccessorySlots = ACCESSORY_SLOTS
 let activeAccessories = ACCESSORIES
+let customStyleState = { activeId: '', styles: [] }
+let selectedPetFamilyId = petFamilyById(localStorage.getItem('kodama-pet-family') || DEFAULT_PET_FAMILY_ID).id
+let builtInFamilySelectionEnabled = true
+let activeAppearanceConfirm = null
 let activeBubbleEvent = null
-let activePanelTab = 'settings'
+// The first surface should explain the pet itself: egg, token feeding and the
+// next evolution. Settings remain one click away but no longer dominate day one.
+let activePanelTab = 'appearance'
 let eventSeq = 0
 let bubbleSeq = 0
 const eventLog = []
@@ -112,12 +182,12 @@ const MAX_EVENT_LOG = 40
 const MAX_SESSION_TITLE_CACHE = 200
 const MAX_TRANSIENT_BUBBLES = 6
 const MAX_PERSISTENT_BUBBLES = 120
-const PANEL_TABS = new Set(['settings', 'waiting', 'done', 'sessions', 'bridge', 'recent', 'config'])
+const PANEL_TABS = new Set(['appearance', 'settings', 'waiting', 'done', 'sessions', 'lark-inbox', 'bridge', 'recent', 'config'])
 const BUBBLE_ACTION_DEBOUNCE_MS = 600
 const ACTIVE_TARGET_TTL_MS = 10 * 60 * 1000
 const FLOATING_PADDING = 8
 const BUBBLE_WIDTH = 340
-const PANEL_WIDTH = 310
+const PANEL_WIDTH = 340
 let bridgeTasksSharePending = false
 let bridgeTasksState = {
   loading: false,
@@ -126,7 +196,41 @@ let bridgeTasksState = {
   tasks: [],
   updatedAt: '',
 }
-const UI_SETTINGS_VERSION = 3
+let larkInboxState = {
+  ok: true,
+  enabled: true,
+  loading: false,
+  loaded: false,
+  error: '',
+  chats: [],
+  messages: [],
+  chatCount: 0,
+  messageCount: 0,
+  newCount: 0,
+  updatedAt: '',
+}
+let larkWebPushState = {
+  ok: true,
+  enabled: true,
+  running: false,
+  windowVisible: false,
+  injected: false,
+  error: '',
+  lastPushAt: '',
+  lastMessageAt: '',
+  pushCount: 0,
+  messageCount: 0,
+}
+let larkBaseSinkState = {
+  ok: true,
+  enabled: false,
+  baseTokenConfigured: false,
+  url: '',
+  tableId: '消息',
+  queueLength: 0,
+  syncedCount: 0,
+  error: '',
+}
 const CORNERS = new Set(['auto', 'near', 'top-left', 'top-right', 'bottom-left', 'bottom-right'])
 const TERMINAL_LAUNCHERS = new Set(['auto', 'cmux', 'orca'])
 const MOVE_MODE_MS = 15000
@@ -179,7 +283,7 @@ function clampNumber(value, min, max, fallback) {
 function normalizeUiSettings(source = {}) {
   return {
     version: UI_SETTINGS_VERSION,
-    petScale: clampNumber(source.petScale, 0.4, 1.25, DEFAULT_UI_SETTINGS.petScale),
+    petScale: clampPetScale(source.petScale, DEFAULT_UI_SETTINGS.petScale),
     petOpacity: clampNumber(source.petOpacity, 0.25, 1, DEFAULT_UI_SETTINGS.petOpacity),
     hitboxScale: clampNumber(source.hitboxScale, 0.25, 1, DEFAULT_UI_SETTINGS.hitboxScale),
     triggerMode: source.triggerMode === 'left' ? 'left' : 'right',
@@ -207,7 +311,7 @@ function loadUiSettings() {
     const raw = JSON.parse(localStorage.getItem('kodama-ui-settings') || '{}')
     // Older settings used a 100% pet and full transparent model bounds. Reset
     // once so running installs pick up the compact, low-misclick defaults.
-    const source = raw.version === UI_SETTINGS_VERSION ? raw : {}
+    const source = uiSettingsSourceForVersion(raw)
     return normalizeUiSettings(source)
   } catch {
     return { ...DEFAULT_UI_SETTINGS }
@@ -327,10 +431,22 @@ async function init() {
     // without it we use the public Live2D backend.
     const local = await importLocal('./config/render.local.js')
 
-    if (local?.RENDER?.backend === 'gif') {
+    const selectedFamily = petFamilyById(selectedPetFamilyId)
+    const localRender = local?.RENDER
+    const localUsesBuiltInFamily = localRender?.backend === 'gif' && PET_FAMILIES.some((family) => family.set === localRender.gif?.set)
+    builtInFamilySelectionEnabled = !localRender || localUsesBuiltInFamily
+    const renderConfig = builtInFamilySelectionEnabled ? {
+      ...DEFAULT_PET_RENDER,
+      gif: {
+        ...DEFAULT_PET_RENDER.gif,
+        set: selectedFamily.set,
+        stages: selectedFamily.stages,
+      },
+    } : localRender
+    if (renderConfig.backend === 'gif') {
       const { initGifBackend } = await import('./backends/gif.js')
       canvas.style.display = 'none'
-      activeGifConfig = local.RENDER.gif || {}
+      activeGifConfig = renderConfig.gif || DEFAULT_PET_RENDER.gif
       backend = initGifBackend(activeGifConfig)
       // The gif backend is a plain <img>; give it the same petX/petY positioning
       // Live2D gets via layout(), or it can't be dragged (drag updates petX/petY
@@ -343,13 +459,15 @@ async function init() {
       backend = await initLive2D()
     }
 
+    await refreshCustomStyles({ quiet: true })
+
     await loadAccessoryPack()
     configureAccessories({ accessories: activeAccessories, slots: activeAccessorySlots })
     setupInteraction()
     // Tray "size" presets push a pet scale into the renderer (the overlay window
     // itself is fixed to the work area now).
     window.pet.onSetScale?.((scale) => {
-      uiSettings.petScale = clampNumber(scale, 0.4, 1.25, uiSettings.petScale)
+      uiSettings.petScale = clampPetScale(scale, uiSettings.petScale)
       saveUiSettings()
       applyUiSettings()
     })
@@ -378,8 +496,6 @@ async function init() {
     accessoryLayer = initAccessoryLayer(() => backend?.getBounds?.(), { accessories: activeAccessories })
     applyUiSettings()
     loadPomodoroSettings()
-    say('你好，我是 Kodama~ 🌳', 3000)
-
     // One pet, two sources — both flow through the same handler (reaction + growth).
     const hooks = {
       say,
@@ -394,6 +510,7 @@ async function init() {
     }
     await initGrowth(hooks)
     syncAccessories()
+    say(welcomeCopyForGrowth(getGrowthState()), 4200)
     const lastTarget = await window.pet.getLastOpenedTarget?.()
     if (lastTarget) noteActiveTarget(lastTarget)
     // initGrowth loads the real level after the first applyUiSettings() already
@@ -416,7 +533,6 @@ async function init() {
         })
         speakEvent(event) // optional macOS TTS for important events
       }
-      feedGrowth(event.type) // P4: events feed the pet
       // Cross-source token ledger: bridge (source 'lark') events may carry tokens.
       if (event.source === 'lark' && event.tokens) window.pet.addLarkTokens?.(event.tokens)
     }
@@ -431,6 +547,7 @@ async function init() {
     window.pet.onEnterMoveMode?.(() => enterMoveMode())
     window.pet.onSetDndMode?.((enabled) => setDndMode(enabled === true))
     setupEventPanel()
+    setupLarkInbox()
     setupUpdateStatus()
     window.pet.onEquipAccessory?.((request) => {
       const result = equipAccessory(request)
@@ -495,9 +612,14 @@ function syncEvolution(level) {
 
 function syncAccessories() {
   const state = getGrowthState()
-  backend?.setLevel?.(state.level) // gif backend: evolve the sprite by level
+  const look = appearanceState()
+  // A user may wear an older unlocked form; local GIF packs follow that form's
+  // level threshold while automatic mode continues to track the real level.
+  backend?.setLevel?.(look.selectedStage === 'auto' ? state.level : look.stage.minLevel)
   syncEvolution(state.level)
   accessoryLayer?.setEquipped(state.equippedAccessories || {})
+  accessoryLayer?.setAppearance({ skinId: look.skin.id, stageId: look.stage.id })
+  renderAppearancePanel()
   window.pet.updateAccessoryMenu?.({
     slots: activeAccessorySlots,
     accessories: activeAccessories.map(({ id, slot, label, unlockLevel, icon, cost }) => ({ id, slot, label, unlockLevel, icon, cost })),
@@ -506,6 +628,334 @@ function syncAccessories() {
     exp: state.exp,
     level: state.level,
   })
+}
+
+function renderAppearancePanel() {
+  if (!appearancePanel) return
+  const state = getGrowthState()
+  const look = appearanceState()
+  const selectedFamily = petFamilyById(selectedPetFamilyId)
+  const familyStage = selectedFamily.stages.find(stage => stage.minLevel === look.stage.minLevel) || selectedFamily.stages[0]
+  const activeCustomStyle = customStyleState.styles.find(style => style.id === customStyleState.activeId)
+  appearanceStageName.textContent = activeCustomStyle?.label || selectedFamily.label
+  appearanceStageCopy.textContent = activeCustomStyle
+    ? '我的自定义形象 · Agent 状态动画仍然生效'
+    : `${familyStage.label} · ${look.stage.description}`
+  appearanceLevel.textContent = `Lv.${state.level}`
+  appearanceProgressBar.style.width = `${Math.round(look.progress.ratio * 100)}%`
+  appearanceProgressLabel.textContent = `${look.progress.value} / ${look.progress.required} 经验`
+
+  const journey = look.journey
+  const tokenProgress = look.tokenProgress
+  const familyCurrentStage = selectedFamily.stages.find(stage => stage.minLevel === journey.currentStage.minLevel) || journey.currentStage
+  const familyNextStage = journey.nextStage
+    ? selectedFamily.stages.find(stage => stage.minLevel === journey.nextStage.minLevel) || journey.nextStage
+    : null
+  growthJourneyCard.dataset.stage = journey.currentStage.id
+  growthJourneyBadge.textContent = journey.nextStage
+    ? (journey.currentStage.id === 'egg' ? '孵化中' : '进化中')
+    : '已完全体'
+  growthJourneyTitle.textContent = familyNextStage
+    ? `下一站 · ${familyNextStage.label}`
+    : `${selectedFamily.label} · 完全体`
+  growthJourneyCopy.textContent = journey.nextStage
+    ? `当前是 ${familyCurrentStage.label}，还差 ${journey.levelsRemaining} 级；继续使用 Agent 喂养它`
+    : `${familyCurrentStage.label}已经长成最终形态，仍会继续积累陪伴记录`
+  growthJourneyBar.style.width = `${Math.round(journey.progress.ratio * 100)}%`
+  growthJourneyProgress.textContent = journey.nextStage
+    ? `${journey.progress.value} / ${journey.progress.required} 成长经验`
+    : '最终形态已解锁'
+  growthTokenProgress.textContent = `${tokenProgress.value} / ${tokenProgress.required} token`
+
+  petFamilyOptions.innerHTML = PET_FAMILIES.map((family) => [
+    `<button type="button" data-pet-family-id="${escapeHtml(family.id)}" class="pet-family-choice${selectedPetFamilyId === family.id ? ' active' : ''}" aria-pressed="${selectedPetFamilyId === family.id}" ${builtInFamilySelectionEnabled ? '' : 'disabled'} title="${escapeHtml(family.description)}">`,
+    `<span class="pet-family-preview" style="--family-a:${escapeHtml(family.palette[0])};--family-b:${escapeHtml(family.palette[1])}"><img src="./pets/${escapeHtml(family.set)}/${escapeHtml(family.preview)}" alt="" /></span>`,
+    `<strong>${escapeHtml(family.shortLabel)}</strong><small>${escapeHtml(family.symbol)} 从蛋开始</small></button>`,
+  ].join('')).join('')
+
+  if (customStyleUpload) {
+    customStyleUpload.disabled = typeof backend?.setCustomSource !== 'function'
+    customStyleUpload.title = customStyleUpload.disabled ? '当前渲染模式暂不支持图片形象' : '上传 PNG、GIF、WebP 或 JPG'
+  }
+  customStyleOptions.innerHTML = [
+    '<div class="custom-style-card">',
+    `<button type="button" data-custom-style-id="" class="custom-style-choice${customStyleState.activeId ? '' : ' active'}" aria-pressed="${!customStyleState.activeId}" title="恢复 Kodama 内置成长形象">`,
+    '<span class="custom-style-built-in">✦</span><small>内置精灵</small></button></div>',
+    ...customStyleState.styles.map(style => [
+      '<div class="custom-style-card">',
+      `<button type="button" data-custom-style-id="${escapeHtml(style.id)}" class="custom-style-choice${customStyleState.activeId === style.id ? ' active' : ''}" aria-pressed="${customStyleState.activeId === style.id}" title="使用 ${escapeHtml(style.label)}">`,
+      `<img src="${escapeHtml(style.url)}" alt="" /><small>${escapeHtml(style.label)}</small></button>`,
+      `<button type="button" data-custom-style-delete="${escapeHtml(style.id)}" class="custom-style-delete" title="删除 ${escapeHtml(style.label)}">×</button>`,
+      '</div>',
+    ].join('')),
+  ].join('')
+
+  growthStageOptions.innerHTML = [
+    `<button type="button" data-growth-stage="auto" class="growth-stage-choice${look.selectedStage === 'auto' ? ' active' : ''}" aria-pressed="${look.selectedStage === 'auto'}">`,
+    '<span class="stage-symbol">↻</span><strong>自然成长</strong><small>随等级进化</small></button>',
+    ...look.stages.map((stage) => [
+      `<button type="button" data-growth-stage="${escapeHtml(stage.id)}" class="growth-stage-choice${look.selectedStage === stage.id ? ' active' : ''}${stage.unlocked ? '' : ' locked'}" aria-pressed="${look.selectedStage === stage.id}" ${stage.unlocked ? '' : 'disabled'}>`,
+      `<span class="stage-symbol">${escapeHtml(stage.symbol)}</span><strong>${escapeHtml(selectedFamily.stages.find(item => item.minLevel === stage.minLevel)?.label || stage.shortLabel)}</strong>`,
+      `<small>${stage.unlocked ? `Lv.${stage.minLevel} 已解锁` : `Lv.${stage.minLevel} 解锁`}</small></button>`,
+    ].join('')),
+  ].join('')
+
+  skinOptions.innerHTML = look.skins.map((skin) => [
+    `<button type="button" data-skin-id="${escapeHtml(skin.id)}" class="skin-choice${look.skin.id === skin.id ? ' active' : ''}" aria-pressed="${look.skin.id === skin.id}" title="${escapeHtml(skin.description)}">`,
+    `<span class="skin-swatch" style="--skin-a:${escapeHtml(skin.swatch[0])};--skin-b:${escapeHtml(skin.swatch[1])}"></span>`,
+    `<strong>${escapeHtml(skin.label)}</strong></button>`,
+  ].join('')).join('')
+
+  const unlocked = new Set(state.unlockedAccessories || [])
+  const equipped = state.equippedAccessories || {}
+  outfitOptions.innerHTML = activeAccessories.map((accessory) => {
+    const isUnlocked = unlocked.has(accessory.id)
+    const isEquipped = equipped[accessory.slot] === accessory.id
+    const visual = accessory.icon || accessoryPreview(accessory.id)
+    const hint = isUnlocked ? (isEquipped ? '已佩戴' : '点击佩戴') : accessory.cost ? `${accessory.cost}经验` : `Lv.${accessory.unlockLevel}`
+    return [
+      `<button type="button" data-accessory-id="${escapeHtml(accessory.id)}" data-accessory-slot="${escapeHtml(accessory.slot)}" class="outfit-choice${isEquipped ? ' active' : ''}${isUnlocked ? '' : ' locked'}" aria-pressed="${isEquipped}" ${isUnlocked ? '' : 'disabled'} title="${escapeHtml(accessory.label)} · ${escapeHtml(hint)}">`,
+      `<span>${escapeHtml(visual)}</span><small>${escapeHtml(accessory.label)}</small></button>`,
+    ].join('')
+  }).join('')
+}
+
+function accessoryPreview(id) {
+  if (id === 'sprout') return '🌱'
+  if (id === 'round_glasses') return '◎'
+  if (id === 'agent_badge') return 'AI'
+  if (id === 'focus_halo') return '◌'
+  return '✦'
+}
+
+function normalizeCustomStyleSnapshot(snapshot) {
+  const styles = Array.isArray(snapshot?.styles)
+    ? snapshot.styles.filter(style => style?.id && style?.url).map(style => ({
+      id: String(style.id),
+      label: String(style.label || '我的桌宠'),
+      url: String(style.url),
+      format: String(style.format || ''),
+    }))
+    : []
+  const activeId = styles.some(style => style.id === snapshot?.activeId) ? String(snapshot.activeId) : ''
+  return { activeId, styles }
+}
+
+function applyCustomStyleSnapshot(snapshot) {
+  customStyleState = normalizeCustomStyleSnapshot(snapshot)
+  const active = customStyleState.styles.find(style => style.id === customStyleState.activeId)
+  backend?.setCustomSource?.(active?.url || '')
+  renderAppearancePanel()
+  backend?.applySettings?.()
+}
+
+async function refreshCustomStyles({ quiet = false } = {}) {
+  if (!window.pet.customStyles) return
+  try {
+    applyCustomStyleSnapshot(await window.pet.customStyles())
+  } catch (error) {
+    if (!quiet) say(`读取自定义形象失败：${error?.message || error}`, 3200)
+  }
+}
+
+function customStyleErrorText(result) {
+  if (result?.error === 'unsupported-format') return '仅支持 PNG、GIF、WebP 和 JPG'
+  if (result?.error === 'file-too-large') return '图片太大，请选择 25MB 以内的文件'
+  if (result?.error === 'file-not-found') return '找不到这个图片文件'
+  return result?.error || '操作失败'
+}
+
+function positionAppearanceConfirm() {
+  if (!activeAppearanceConfirm || !appearanceConfirmCard || !eventPanel) return
+  const cardHeight = Math.max(160, appearanceConfirmCard.getBoundingClientRect().height || 176)
+  const rect = anchoredConfirmRect({
+    panelRect: eventPanel.getBoundingClientRect(),
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    cardHeight,
+  })
+  appearanceConfirmCard.style.left = `${rect.left}px`
+  appearanceConfirmCard.style.top = `${rect.top}px`
+  appearanceConfirmCard.style.width = `${rect.width}px`
+}
+
+function finishAppearanceConfirm(accepted = false) {
+  if (!activeAppearanceConfirm) return
+  const pending = activeAppearanceConfirm
+  activeAppearanceConfirm = null
+  appearanceConfirm?.classList.add('hidden')
+  appearanceConfirm?.setAttribute('aria-hidden', 'true')
+  if (pending.restoreFocus?.isConnected && panelVisible) pending.restoreFocus.focus?.()
+  pending.resolve(accepted === true)
+}
+
+function requestAppearanceConfirm({ title, copy, confirmLabel = '确认领养' }) {
+  if (!appearanceConfirm || !appearanceConfirmCard) return Promise.resolve(false)
+  if (activeAppearanceConfirm) finishAppearanceConfirm(false)
+  if (appearanceConfirmTitle) appearanceConfirmTitle.textContent = title
+  if (appearanceConfirmCopy) appearanceConfirmCopy.textContent = copy
+  if (appearanceConfirmAccept) appearanceConfirmAccept.textContent = confirmLabel
+
+  return new Promise((resolve) => {
+    activeAppearanceConfirm = { resolve, restoreFocus: document.activeElement }
+    appearanceConfirm.classList.remove('hidden')
+    appearanceConfirm.setAttribute('aria-hidden', 'false')
+    positionAppearanceConfirm()
+    requestAnimationFrame(() => appearanceConfirmAccept?.focus())
+  })
+}
+
+function setupAppearanceConfirm() {
+  appearanceConfirm?.addEventListener('click', (event) => {
+    event.stopPropagation()
+    if (event.target.closest?.('#appearance-confirm-accept')) finishAppearanceConfirm(true)
+    else if (event.target.closest?.('[data-appearance-confirm-cancel]')) finishAppearanceConfirm(false)
+  })
+  window.addEventListener('keydown', (event) => {
+    if (!activeAppearanceConfirm) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      finishAppearanceConfirm(false)
+      return
+    }
+    if (event.key !== 'Tab' || !appearanceConfirmCancel || !appearanceConfirmAccept) return
+    const first = appearanceConfirmCancel
+    const last = appearanceConfirmAccept
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  })
+}
+
+async function chooseAppearance(target) {
+  const restartButton = target.closest?.('#growth-restart')
+  if (restartButton) {
+    const accepted = await requestAppearanceConfirm({
+      title: '重新孵化一颗蛋？',
+      copy: '会清空当前等级、经验、食物和已解锁装扮，并恢复为当前伙伴的蛋形态。',
+      confirmLabel: '确认重新孵化',
+    })
+    if (!accepted) return
+    if (customStyleState.activeId) {
+      const customResult = await window.pet.activateCustomStyle?.('')
+      if (!customResult?.ok) {
+        say(`暂时无法恢复蛋形象：${customStyleErrorText(customResult)}`, 3200)
+        return
+      }
+      applyCustomStyleSnapshot(customResult.snapshot)
+    }
+    resetGrowthFromCurrentTokens()
+    syncAccessories()
+    say(`🥚 新的 ${petFamilyById(selectedPetFamilyId).label} 蛋正在等待 token 能量`, 3600)
+    return
+  }
+  const familyButton = target.closest?.('[data-pet-family-id]')
+  if (familyButton) {
+    if (!builtInFamilySelectionEnabled) {
+      say('本地高级素材包启用时不能切换内置伙伴', 2600)
+      return
+    }
+    const family = petFamilyById(familyButton.dataset.petFamilyId)
+    const isNewFamily = family.id !== selectedPetFamilyId
+    const currentGrowth = getGrowthState()
+    const hasGrowth = currentGrowth.level > 1 || currentGrowth.exp > 0 || currentGrowth.food > 0 || currentGrowth.totalFed > 0
+    if (isNewFamily && hasGrowth) {
+      const accepted = await requestAppearanceConfirm({
+        title: `领养 ${family.label}？`,
+        copy: '新伙伴会从一颗蛋开始，并清空当前等级、经验、食物和已解锁装扮。',
+        confirmLabel: `领养 ${family.shortLabel}`,
+      })
+      if (!accepted) return
+    }
+    if (customStyleState.activeId) {
+      const customResult = await window.pet.activateCustomStyle?.('')
+      if (!customResult?.ok) {
+        say(`暂时无法恢复蛋形象：${customStyleErrorText(customResult)}`, 3200)
+        return
+      }
+      applyCustomStyleSnapshot(customResult.snapshot)
+    }
+    if (isNewFamily) resetGrowthFromCurrentTokens()
+    selectedPetFamilyId = family.id
+    localStorage.setItem('kodama-pet-family', family.id)
+    activeGifConfig = {
+      ...DEFAULT_PET_RENDER.gif,
+      set: family.set,
+      stages: family.stages,
+    }
+    backend?.setPetPack?.(activeGifConfig)
+    syncAccessories()
+    say(isNewFamily ? `🥚 领养了 ${family.label}，从蛋开始陪你成长` : `已换回 ${family.label}`, 2800)
+    return
+  }
+  const uploadButton = target.closest?.('#custom-style-upload')
+  if (uploadButton) {
+    if (typeof backend?.setCustomSource !== 'function') {
+      say('当前渲染模式暂不支持图片形象', 2600)
+      return
+    }
+    const result = await window.pet.importCustomStyle?.()
+    if (!result || result.canceled) return
+    if (!result.ok) {
+      say(`上传失败：${customStyleErrorText(result)}`, 3200)
+      return
+    }
+    applyCustomStyleSnapshot(result.snapshot)
+    say(`已换上 ${result.style?.label || '新的桌宠形象'}`, 2200)
+    return
+  }
+  const deleteButton = target.closest?.('[data-custom-style-delete]')
+  if (deleteButton) {
+    const result = await window.pet.deleteCustomStyle?.(deleteButton.dataset.customStyleDelete)
+    if (!result?.ok) say(`删除失败：${customStyleErrorText(result)}`, 2800)
+    else {
+      applyCustomStyleSnapshot(result.snapshot)
+      say('已删除这个自定义形象', 1800)
+    }
+    return
+  }
+  const customButton = target.closest?.('[data-custom-style-id]')
+  if (customButton) {
+    const id = customButton.dataset.customStyleId || ''
+    const result = await window.pet.activateCustomStyle?.(id)
+    if (!result?.ok) say(`切换失败：${customStyleErrorText(result)}`, 2800)
+    else {
+      applyCustomStyleSnapshot(result.snapshot)
+      const active = customStyleState.styles.find(style => style.id === id)
+      say(active ? `已换上 ${active.label}` : '已恢复内置成长形象', 2000)
+    }
+    return
+  }
+  const skinButton = target.closest?.('[data-skin-id]')
+  if (skinButton) {
+    const result = selectSkin(skinButton.dataset.skinId)
+    if (result.ok) say(`换上 ${result.skin.label} 皮肤`, 1800)
+    syncAccessories()
+    return
+  }
+  const stageButton = target.closest?.('[data-growth-stage]')
+  if (stageButton) {
+    const result = selectGrowthStage(stageButton.dataset.growthStage)
+    if (!result.ok) say(`🔒 ${result.reason}`, 2200)
+    else say(stageButton.dataset.growthStage === 'auto' ? '已恢复自然成长' : `换上 ${result.stage.label} 形态`, 2000)
+    syncAccessories()
+    backend?.applySettings?.()
+    return
+  }
+  const accessoryButton = target.closest?.('[data-accessory-id]')
+  if (!accessoryButton) return
+  const state = getGrowthState()
+  const slot = accessoryButton.dataset.accessorySlot
+  const id = accessoryButton.dataset.accessoryId
+  const result = state.equippedAccessories?.[slot] === id
+    ? unequipAccessory(slot)
+    : equipAccessory({ id })
+  if (!result.ok) say(`🔒 ${result.reason}`, 2200)
+  else say(result.action === 'equip' ? `已佩戴 ${result.accessory.label}` : '已收起这件装扮', 1800)
+  syncAccessories()
 }
 
 // ---------- Live2D backend ----------
@@ -635,8 +1085,11 @@ function interactivePetBounds() {
   const b = petBounds()
   if (!b) return null
   if (isMoveModeActive()) return b
-  const width = b.width * uiSettings.hitboxScale
-  const height = b.height * uiSettings.hitboxScale
+  const { width, height } = scaledHitboxSize({
+    width: b.width,
+    height: b.height,
+    scale: uiSettings.hitboxScale,
+  })
   const centerX = b.x + b.width / 2
   const centerY = b.y + b.height * 0.66
   return {
@@ -664,8 +1117,8 @@ function dragVisibleBounds() {
 function gifLayout() {
   const img = backend?.el
   if (!img) return
-  const natW = img.naturalWidth || 212
-  const natH = img.naturalHeight || 159
+  const natW = Number(activeGifConfig?.displayWidth) || img.naturalWidth || 212
+  const natH = Number(activeGifConfig?.displayHeight) || img.naturalHeight || 159
   const scale = uiSettings.petScale * growthScale()
   const pw = natW * scale
   const ph = natH * scale
@@ -790,7 +1243,9 @@ function setupInteraction() {
   refreshMouseInteractivity = syncIgnoringState
 
   function targetInsidePanel(target) {
-    return Boolean(eventPanel && target?.nodeType && eventPanel.contains(target))
+    return Boolean(target?.nodeType && (
+      eventPanel?.contains(target) || appearanceConfirm?.contains(target)
+    ))
   }
 
   window.addEventListener('mousedown', (e) => {
@@ -955,6 +1410,12 @@ function configureWander() {
 
 let tokenStats = { today: 0, last7: 0, total: 0, local: {}, lark: {} }
 
+function resetGrowthFromCurrentTokens() {
+  const tokenTotal = tokenTotalWhenReady(tokenStats)
+  resetGrowth({ tokenTotal })
+  if (tokenTotal == null) refreshTokens()
+}
+
 function fmtTokens(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
@@ -966,7 +1427,12 @@ async function refreshTokens() {
     const s = await window.pet.tokenStats?.()
     if (s) {
       tokenStats = s
-      feedTokens(s.total)
+      const total = tokenTotalWhenReady(s)
+      if (total == null) {
+        setTimeout(refreshTokens, 10000)
+        return
+      }
+      feedTokens(total)
     }
   } catch (_) {
     /* main not ready */
@@ -1326,6 +1792,7 @@ function positionBubble() {
 function positionPanel() {
   if (!eventPanel || eventPanel.classList.contains('hidden')) return
   setElementCorner(eventPanel, uiSettings.panelCorner, PANEL_WIDTH, 260)
+  positionAppearanceConfirm()
 }
 
 function bubbleKind(event) {
@@ -1610,16 +2077,40 @@ function addPreviewHoverLines(rows, seen, item, currentText, maxLines) {
   }
 }
 
+function eventSessionId(event) {
+  return String(event?.sessionId || event?.session_id || event?.session || '').trim()
+}
+
+function friendlyPreviewError(error) {
+  const code = String(error || '').trim()
+  if (code === 'local-path-not-found') return '会话文件不在本机或已被清理'
+  if (code === 'missing-transcript-path') return '这条事件没有带会话文件路径'
+  if (code === 'transcript-not-file') return '会话路径不是文件'
+  if (code === 'local-path-not-absolute') return '会话路径不是绝对路径'
+  if (code === 'local-path-not-allowed') return '会话路径不在允许读取范围内'
+  return code || '没有可见摘要'
+}
+
 function bubbleHoverHtml(item) {
   const currentText = eventCurrentText(item.event, item.text, 96)
   const seen = new Set()
   const preview = item.preview
+  if (isLarkBridgeAgentEvent(item.event)) {
+    const rows = [`<div class="bubble-hover-title">${escapeHtml(item.title)}</div>`]
+    pushHoverText(rows, seen, currentText ? `最新：${currentText}` : '', { max: 96 })
+    rows.push('<div class="bubble-hover-meta">来源：飞书机器人</div>')
+    const target = buildTargetForEvent(item.event)
+    if (target?.kind === 'lark') {
+      rows.push(`<div class="bubble-hover-meta">${escapeHtml(target.label)}</div>`)
+    }
+    return rows.join('')
+  }
   if (preview?.ok) {
     const rows = [
       `<div class="bubble-hover-title">${escapeHtml(item.title || preview.title)}</div>`,
     ]
     pushHoverText(rows, seen, currentText ? `最新：${currentText}` : '', { max: 96 })
-    addPreviewHoverLines(rows, seen, item, currentText, currentText ? 1 : 2)
+    addPreviewHoverLines(rows, seen, item, currentText, preview?.degraded ? 4 : currentText ? 1 : 2)
     return rows.join('')
   }
   if (preview?.loading) {
@@ -1650,12 +2141,14 @@ function bubbleHoverHtml(item) {
   const projectLabel = eventExplicitProjectLabel(item.event)
   const workdirLabel = eventWorkdirLabel(item.event)
   const workId = eventWorkId(item.event)
+  const sessionId = eventSessionId(item.event)
   if (actorLabel) rows.push(`<div class="bubble-hover-meta">来源：${escapeHtml(actorLabel)}</div>`)
   if (appLabel) rows.push(`<div class="bubble-hover-meta">App：${escapeHtml(appLabel)}</div>`)
   if (agentLabel && agentLabel !== appLabel) rows.push(`<div class="bubble-hover-meta">Agent：${escapeHtml(agentLabel)}</div>`)
   if (projectLabel) rows.push(`<div class="bubble-hover-meta">项目：${escapeHtml(projectLabel)}</div>`)
   if (workdirLabel && workdirLabel !== projectLabel) rows.push(`<div class="bubble-hover-meta">工作目录：${escapeHtml(workdirLabel)}</div>`)
   if (workId) rows.push(`<div class="bubble-hover-meta">Work ID：${escapeHtml(shortText(workId, 18))}</div>`)
+  if (sessionId) rows.push(`<div class="bubble-hover-meta">Session：${escapeHtml(shortText(sessionId, 18))}</div>`)
   return rows.join('')
 }
 
@@ -1698,6 +2191,19 @@ function previewKey(request) {
 // available (Codex `agent-turn-complete` notify carries the prompt + result but
 // no transcript path, so the file-read preview always failed before).
 function localPreviewFromEvent(event, fallbackText = '') {
+  if (isLarkBridgeAgentEvent(event)) {
+    const currentText = eventCurrentText(event, fallbackText, 96)
+    const target = buildTargetForEvent(event)
+    return {
+      ok: true,
+      title: bubbleTitle(event),
+      lines: [
+        ...(currentText ? [`最新: ${currentText}`] : []),
+        '来源: 飞书机器人',
+        ...(target?.kind === 'lark' ? [target.label] : []),
+      ],
+    }
+  }
   const lines = []
   const currentText = eventCurrentText(event, fallbackText, 96)
   const actorLabel = eventActorLabel(event)
@@ -1706,6 +2212,7 @@ function localPreviewFromEvent(event, fallbackText = '') {
   const projectLabel = eventExplicitProjectLabel(event)
   const workdirLabel = eventWorkdirLabel(event)
   const workId = eventWorkId(event)
+  const sessionId = eventSessionId(event)
   if (currentText) lines.push(`最新: ${currentText}`)
   if (actorLabel) lines.push(`来源: ${actorLabel}`)
   if (appLabel) lines.push(`App: ${appLabel}`)
@@ -1713,9 +2220,23 @@ function localPreviewFromEvent(event, fallbackText = '') {
   if (projectLabel) lines.push(`项目: ${projectLabel}`)
   if (workdirLabel && workdirLabel !== projectLabel) lines.push(`工作目录: ${workdirLabel}`)
   if (workId) lines.push(`Work ID: ${shortText(workId, 18)}`)
+  if (sessionId) lines.push(`Session: ${shortText(sessionId, 18)}`)
   if (!currentText && event?.prompt) lines.push(`会话: ${shortText(event.prompt, 74)}`)
   if (!lines.length) return { ok: false, error: '这条事件没有可显示的摘要' }
   return { ok: true, title: bubbleTitle(event), lines }
+}
+
+function degradedPreviewFromEvent(event, fallbackText, error) {
+  const preview = localPreviewFromEvent(event, fallbackText)
+  if (!preview.ok) return { ok: false, error: friendlyPreviewError(error) }
+  return {
+    ...preview,
+    degraded: true,
+    lines: [
+      ...preview.lines,
+      `会话摘要: ${friendlyPreviewError(error)}`,
+    ],
+  }
 }
 
 async function ensureBubblePreview(item, event, anchor) {
@@ -1734,9 +2255,9 @@ async function ensureBubblePreview(item, event, anchor) {
   item.preview = { loading: true }
   try {
     const result = await window.pet.sessionPreview?.(request)
-    item.preview = result?.ok ? result : { ok: false, error: result?.error || '没有可见摘要' }
+    item.preview = result?.ok ? result : degradedPreviewFromEvent(item.event, item.text, result?.error || '没有可见摘要')
   } catch (error) {
-    item.preview = { ok: false, error: String(error?.message || error) }
+    item.preview = degradedPreviewFromEvent(item.event, item.text, String(error?.message || error))
   }
   sessionPreviewCache.set(key, item.preview)
   if (activeHoverBubbleId === item.id) {
@@ -1747,16 +2268,89 @@ async function ensureBubblePreview(item, event, anchor) {
 
 init()
 
+function setupLarkInbox() {
+  window.pet.onLarkInboxUpdate?.((snapshot) => {
+    larkInboxState = normalizeLarkInboxState(snapshot, true)
+    renderLarkInbox()
+    syncEventPanel()
+  })
+  window.pet.onLarkWebPushUpdate?.((status) => {
+    larkWebPushState = normalizeLarkWebPushState(status)
+    renderLarkInbox()
+    syncEventPanel()
+  })
+  window.pet.larkInbox?.()
+    .then((snapshot) => {
+      if (!snapshot) return
+      larkInboxState = normalizeLarkInboxState(snapshot, Boolean(snapshot.updatedAt || snapshot.messages?.length))
+      renderLarkInbox()
+      syncEventPanel()
+    })
+    .catch((error) => {
+      larkInboxState = {
+        ...larkInboxState,
+        ok: false,
+        loaded: true,
+        error: error?.message || String(error),
+      }
+      renderLarkInbox()
+    })
+  window.pet.larkWebPushStatus?.()
+    .then((status) => {
+      larkWebPushState = normalizeLarkWebPushState(status)
+      renderLarkInbox()
+      syncEventPanel()
+    })
+    .catch((error) => {
+      larkWebPushState = {
+        ...larkWebPushState,
+        ok: false,
+        error: error?.message || String(error),
+      }
+      renderLarkInbox()
+    })
+  window.pet.larkBaseSink?.()
+    .then((summary) => {
+      larkBaseSinkState = normalizeLarkBaseSinkState(summary)
+      renderLarkInbox()
+      syncEventPanel()
+    })
+    .catch((error) => {
+      larkBaseSinkState = {
+        ...larkBaseSinkState,
+        ok: false,
+        error: error?.message || String(error),
+      }
+      renderLarkInbox()
+    })
+}
+
 function setupEventPanel() {
+  setupAppearanceConfirm()
   panelClose?.addEventListener('click', () => togglePanel(false))
+  appearancePanel?.addEventListener('click', (event) => chooseAppearance(event.target))
+  appearanceFeed?.addEventListener('click', (event) => {
+    event.stopPropagation()
+    feedManually()
+    syncAccessories()
+    backend?.applySettings?.()
+  })
   bridgeTasksOpen?.addEventListener('click', () => openBridgeTasksWindow())
   manageOpen?.addEventListener('click', () => window.pet.openManageWindow?.())
   bridgeTasksRefresh?.addEventListener('click', () => refreshBridgeTasks({ force: true }))
   bridgeTasksShare?.addEventListener('click', () => shareBridgeTaskViewer())
   bridgeTasksWindow?.addEventListener('click', () => openBridgeTasksWindow())
+  larkInboxRefresh?.addEventListener('click', () => refreshLarkInbox({ force: true }))
+  larkWebPushOpen?.addEventListener('click', () => openLarkWebPushWindow())
+  larkWebPushReload?.addEventListener('click', () => reloadLarkWebPushWindow())
+  larkBaseOpen?.addEventListener('click', () => openLarkBaseTable())
+  larkInboxEvents?.addEventListener('click', (e) => {
+    const item = e.target.closest?.('[data-lark-message-id]')
+    if (item) openLarkMessageById(item.dataset.larkMessageId)
+  })
   syncBridgeTasksShareButton()
   settingPetScale?.addEventListener('input', () => {
-    uiSettings.petScale = clampNumber(Number(settingPetScale.value) / 100, 0.4, 1.25, DEFAULT_UI_SETTINGS.petScale)
+    uiSettings.petScale = clampPetScale(Number(settingPetScale.value) / 100, DEFAULT_UI_SETTINGS.petScale)
     saveUiSettings()
     applyUiSettings()
   })
@@ -2033,6 +2627,9 @@ function setActivePanelTab(tab) {
   if (activePanelTab === 'bridge' && !bridgeTasksState.loaded && !bridgeTasksState.loading) {
     refreshBridgeTasks()
   }
+  if (activePanelTab === 'lark-inbox' && !larkInboxState.loaded && !larkInboxState.loading) {
+    refreshLarkInbox()
+  }
   positionPanel()
 }
 
@@ -2043,6 +2640,7 @@ function togglePanel(force) {
     window.pet.setIgnoreMouse(false)
     requestAnimationFrame(positionPanel)
   } else {
+    finishAppearanceConfirm(false)
     window.pet.setIgnoreMouse(true, { forward: true })
   }
   refreshMouseInteractivity()
@@ -2436,6 +3034,199 @@ function renderSessionList(el, list) {
   }).join('')
 }
 
+function larkMessageTarget(message) {
+  if (!message?.chatId) return null
+  return {
+    kind: 'lark',
+    chatId: message.chatId,
+    messageId: message.messageId || '',
+    label: message.chatName || '飞书群聊',
+  }
+}
+
+function renderLarkInbox() {
+  if (!larkInboxEvents || !larkInboxSummary) return
+  const state = larkInboxState || {}
+  if (!state.enabled) {
+    larkInboxSummary.textContent = '已关闭'
+    larkInboxEvents.className = 'event-list empty'
+    larkInboxEvents.textContent = '飞书群消息轮询未开启'
+    return
+  }
+  const updated = state.updatedAt ? fmtTime(state.updatedAt) : ''
+  const webPushText = larkWebPushState.enabled === false
+    ? '实时关闭'
+    : larkWebPushState.error
+      ? `实时异常`
+      : larkWebPushState.running
+        ? (larkWebPushState.injected ? '实时已接入' : '实时运行中')
+        : '实时未运行'
+  const baseText = larkBaseSinkState.url
+    ? '表格已绑定'
+    : larkBaseSinkState.baseTokenConfigured
+      ? '表格待启用'
+      : '表格未绑定'
+  const status = state.loading
+    ? '正在读取...'
+    : state.error
+      ? `读取失败：${state.error}`
+      : state.loaded
+        ? `${state.chatCount || 0} 个群 · ${state.messageCount || 0} 条 · ${webPushText} · ${baseText}${updated ? ` · ${updated}` : ''}`
+        : '尚未读取'
+  larkInboxSummary.textContent = status
+  if (larkInboxRefresh) {
+    larkInboxRefresh.disabled = state.loading === true
+    larkInboxRefresh.textContent = state.loading ? '刷新中...' : '刷新'
+  }
+  if (larkWebPushOpen) larkWebPushOpen.textContent = larkWebPushState.windowVisible ? '实时窗口' : '实时登录'
+  if (larkWebPushReload) larkWebPushReload.disabled = larkWebPushState.enabled === false
+  if (larkBaseOpen) {
+    larkBaseOpen.disabled = !larkBaseSinkState.url
+    larkBaseOpen.textContent = larkBaseSinkState.url ? '打开表格' : '表格未绑定'
+    larkBaseOpen.title = larkBaseSinkState.url
+      ? '打开飞书多维表格归档'
+      : '先运行 pnpm run lark:base:setup 创建并绑定多维表格'
+  }
+
+  const messages = Array.isArray(state.messages) ? state.messages.slice(0, 16) : []
+  if (!messages.length) {
+    larkInboxEvents.className = 'event-list empty'
+    larkInboxEvents.textContent = state.loaded ? '暂无最近群消息' : '尚未加载'
+    return
+  }
+  larkInboxEvents.className = 'event-list lark-inbox-list'
+  larkInboxEvents.innerHTML = [
+    '<table class="lark-message-table">',
+    '<thead><tr><th>时间</th><th>群</th><th>发送人</th><th>内容</th><th>来源</th></tr></thead>',
+    '<tbody>',
+    messages.map((message) => {
+      const text = message.content || `[${message.msgType || 'message'}]`
+      const type = message.msgType && message.msgType !== 'text' ? ` ${message.msgType}` : ''
+      const source = message.source === 'web-push' ? '实时' : '轮询'
+      return [
+        `<tr class="lark-message-item" data-lark-message-id="${escapeHtml(message.messageId || '')}">`,
+        `<td>${escapeHtml(fmtTime(message.createdAt || message.createTime))}</td>`,
+        `<td title="${escapeHtml(message.chatName || '飞书群聊')}">${escapeHtml(shortText(message.chatName || '飞书群聊', 18))}</td>`,
+        `<td title="${escapeHtml(message.senderName || '成员')}">${escapeHtml(shortText(message.senderName || '成员', 14))}</td>`,
+        `<td title="${escapeHtml(text)}">${escapeHtml(shortText(text, 58))}${escapeHtml(type)}</td>`,
+        `<td>${escapeHtml(source)}</td>`,
+        '</tr>',
+      ].join('')
+    }).join(''),
+    '</tbody></table>',
+  ].join('')
+}
+
+async function refreshLarkInbox({ force = false } = {}) {
+  if (!force && larkInboxState.loading) return
+  larkInboxState = { ...larkInboxState, loading: true, error: '' }
+  renderLarkInbox()
+  try {
+    const result = await window.pet.refreshLarkInbox?.()
+    larkInboxState = normalizeLarkInboxState(result, true)
+  } catch (error) {
+    larkInboxState = {
+      ...larkInboxState,
+      ok: false,
+      loading: false,
+      loaded: true,
+      error: error?.message || String(error),
+      updatedAt: new Date().toISOString(),
+    }
+  }
+  renderLarkInbox()
+  syncEventPanel()
+}
+
+async function openLarkWebPushWindow() {
+  try {
+    const status = await window.pet.openLarkWebPush?.()
+    larkWebPushState = normalizeLarkWebPushState(status)
+  } catch (error) {
+    larkWebPushState = { ...larkWebPushState, ok: false, error: error?.message || String(error) }
+  }
+  renderLarkInbox()
+  syncEventPanel()
+}
+
+async function reloadLarkWebPushWindow() {
+  try {
+    const status = await window.pet.reloadLarkWebPush?.()
+    larkWebPushState = normalizeLarkWebPushState(status)
+  } catch (error) {
+    larkWebPushState = { ...larkWebPushState, ok: false, error: error?.message || String(error) }
+  }
+  renderLarkInbox()
+  syncEventPanel()
+}
+
+async function openLarkBaseTable() {
+  if (!larkBaseSinkState.url) return
+  try {
+    const result = await window.pet.openLarkBase?.()
+    larkBaseSinkState = normalizeLarkBaseSinkState({ ...larkBaseSinkState, ...result })
+  } catch (error) {
+    larkBaseSinkState = { ...larkBaseSinkState, ok: false, error: error?.message || String(error) }
+  }
+  renderLarkInbox()
+  syncEventPanel()
+}
+
+function normalizeLarkInboxState(snapshot, loaded = true) {
+  const messages = Array.isArray(snapshot?.messages) ? snapshot.messages : []
+  const chats = Array.isArray(snapshot?.chats) ? snapshot.chats : []
+  return {
+    ok: snapshot?.ok !== false,
+    enabled: snapshot?.enabled !== false,
+    loading: snapshot?.loading === true,
+    loaded,
+    error: snapshot?.error || '',
+    chats,
+    messages,
+    chatCount: Number(snapshot?.chatCount || chats.length || 0),
+    messageCount: Number(snapshot?.messageCount || messages.length || 0),
+    newCount: Number(snapshot?.newCount || 0),
+    updatedAt: snapshot?.updatedAt || '',
+  }
+}
+
+function normalizeLarkWebPushState(status) {
+  return {
+    ok: status?.ok !== false,
+    enabled: status?.enabled !== false,
+    running: status?.running === true,
+    windowVisible: status?.windowVisible === true,
+    injected: status?.injected === true,
+    error: status?.error || '',
+    lastPushAt: status?.lastPushAt || '',
+    lastMessageAt: status?.lastMessageAt || '',
+    pushCount: Number(status?.pushCount || 0),
+    messageCount: Number(status?.messageCount || 0),
+    updatedAt: status?.updatedAt || '',
+  }
+}
+
+function normalizeLarkBaseSinkState(summary) {
+  return {
+    ok: summary?.ok !== false,
+    enabled: summary?.enabled === true,
+    baseTokenConfigured: summary?.baseTokenConfigured === true,
+    url: String(summary?.url || ''),
+    tableId: String(summary?.tableId || '消息'),
+    queueLength: Number(summary?.queueLength || 0),
+    syncedCount: Number(summary?.syncedCount || 0),
+    error: summary?.error || '',
+  }
+}
+
+function openLarkMessageById(messageId) {
+  const id = String(messageId || '').trim()
+  if (!id) return
+  const message = (larkInboxState.messages || []).find(item => item.messageId === id)
+  const target = larkMessageTarget(message)
+  if (target) openTarget(target)
+}
+
 function subagentShareButtonHtml(transcript) {
   const transcriptPath = String(transcript || '').trim()
   if (!transcriptPath) return ''
@@ -2472,6 +3263,16 @@ function renderConfig() {
     ['Bridge', activeAgentConfig.bridgeUrl || DEFAULT_BRIDGE_URL],
     ['SSE', agentSyncStatus === 'connected' ? '已连接' : '离线/重连中'],
     ['Hook', '127.0.0.1:7766'],
+    ['飞书群聊', larkInboxState.enabled === false
+      ? '关闭'
+      : larkInboxState.error
+        ? `异常: ${larkInboxState.error}`
+        : `${larkInboxState.chatCount || 0} 群 / ${larkInboxState.messageCount || 0} 条 · ${larkWebPushState.running ? '实时' : '轮询'}`],
+    ['多维表格', larkBaseSinkState.url
+      ? `已绑定 · ${larkBaseSinkState.syncedCount || 0} 条已同步`
+      : larkBaseSinkState.baseTokenConfigured
+        ? '已配置，等待启用'
+        : '未绑定'],
     ['Token', tokenText],
     ['勿扰', uiSettings.dndMode ? '开启' : '关闭'],
     ['声音', uiSettings.soundEnabled ? '开启' : '关闭'],
@@ -2624,14 +3425,23 @@ function syncEventPanel() {
   const done = eventLog.filter(isDone)
   if (metricWaiting) metricWaiting.textContent = String(waiting.length)
   if (metricDone) metricDone.textContent = String(done.length)
+  if (metricInbox) metricInbox.textContent = String(larkInboxState.messageCount || 0)
   if (metricTotal) metricTotal.textContent = String(eventLog.length)
   if (panelStatus) {
     const statusText = agentSyncStatus === 'connected' ? 'Bridge 已连接' : 'Bridge 离线/重连中'
-    panelStatus.textContent = `${statusText} · Hook 127.0.0.1:7766`
+    const inboxText = larkInboxState.enabled === false
+      ? '群聊关闭'
+      : larkInboxState.error
+        ? '群聊异常'
+        : larkInboxState.loading
+          ? '群聊刷新中'
+          : `群聊 ${larkInboxState.messageCount || 0}${larkWebPushState.running ? ' · 实时' : ''}`
+    panelStatus.textContent = `${statusText} · Hook 127.0.0.1:7766 · ${inboxText}`
   }
   renderEventList(waitingEvents, waiting.slice(0, 6))
   renderEventList(doneEvents, done.slice(0, 8))
   renderSessionList(sessionEvents, openableEvents().slice(0, 8))
+  renderLarkInbox()
   renderEventList(recentEvents, eventLog.slice(0, 8))
   renderConfig()
   renderBridgeTasks()
@@ -2643,4 +3453,5 @@ function syncEventPanel() {
 window.addEventListener('resize', () => {
   positionBubble()
   positionPanel()
+  positionAppearanceConfirm()
 })

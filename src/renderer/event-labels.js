@@ -56,6 +56,17 @@ export function isTraeInternalPath(value) {
     || /(^|\/)TRAE SOLO(?: CN)?\/work\/[^/]+$/i.test(normalized)
 }
 
+export function isOrcaRateLimitPath(value) {
+  return /(^|\/)Library\/Application Support\/orca\/rate-limit-pty-cwd$/i.test(normalizePath(value))
+}
+
+export function isLarkBridgeAgentEvent(event) {
+  if (!event) return false
+  if (event.larkBridge === true || event.lark_bridge === true) return true
+  if (/(^|\/)lark-codex-non-owner-[^/]+$/i.test(normalizePath(eventPath(event)))) return true
+  return /通过飞书机器人被调用/.test(firstString(event.prompt, event.title, event.text))
+}
+
 export function eventWorkId(event) {
   const path = eventPath(event)
   if (!isTraeInternalPath(path)) return ''
@@ -112,6 +123,8 @@ export function eventAppLabel(event) {
   if (explicit) return explicit
   const agent = normalizeAgentLabel(event?.agent)
   if (agent) return agent
+  if (isClaudeTranscriptPath(firstString(event?.transcriptPath, event?.transcript_path, event?.agentTranscriptPath, event?.agent_transcript_path))) return 'Claude Code'
+  if (isCodexTranscriptPath(firstString(event?.transcriptPath, event?.transcript_path, event?.agentTranscriptPath, event?.agent_transcript_path))) return 'Codex'
   if (isTraeInternalPath(eventPath(event))) return 'Trae Work'
   return ''
 }
@@ -147,7 +160,7 @@ export function eventExplicitProjectLabel(event) {
 export function eventWorkdirLabel(event) {
   const path = eventPath(event)
   const base = pathBaseName(path)
-  if (!base || isTraeInternalPath(path) || isOpaqueInternalName(base)) return ''
+  if (!base || isLarkBridgeAgentEvent(event) || isTraeInternalPath(path) || isOrcaRateLimitPath(path) || isOpaqueInternalName(base)) return ''
   return shortLabel(base, 28)
 }
 
@@ -162,6 +175,7 @@ export function eventTaskLabel(event) {
 }
 
 export function eventBubbleContext(event, max = 34) {
+  if (isLarkBridgeAgentEvent(event)) return '飞书机器人'
   const app = eventAppLabel(event)
   const task = eventTaskLabel(event)
   if (app && task && app !== task) return shortLabel(`${app} / ${task}`, max)
@@ -254,6 +268,7 @@ export function bridgeTaskShareRequestForEvent(event, options = {}) {
 
 export function eventActorLabel(event) {
   if (!event) return ''
+  if (isLarkBridgeAgentEvent(event)) return '飞书机器人'
   const type = String(event.type || '')
   const text = [
     event.prompt,
@@ -268,7 +283,7 @@ export function eventActorLabel(event) {
   const fromBridgePrompt = /通过飞书机器人被调用|飞书机器人/.test(text)
   const hasLarkContext = Boolean(firstString(event.chatId, event.chat_id, event.messageId, event.message_id))
   if (event.source === 'local') {
-    if (fromBridgePrompt || hasLarkContext) return '飞书机器人 Agent'
+    if (fromBridgePrompt || hasLarkContext) return '飞书机器人'
     return '本机 Agent'
   }
   if (event.source === 'lark') {
@@ -329,6 +344,7 @@ export function sessionRequestForEvent(event, options = {}) {
   if (isCodexInternalMemoryPath(cwd) || isCodexInternalMemoryPath(transcriptPath) || isCodexInternalMemoryPath(agentTranscriptPath)) {
     return null
   }
+  if (isOrcaRateLimitPath(cwd)) return null
   if (client.includes('trae') || client.includes('coco')) return null
 
   const codexTranscript = isCodexTranscriptPath(transcriptPath) || isCodexTranscriptPath(agentTranscriptPath)
@@ -363,7 +379,7 @@ export function targetForEvent(event, options = {}) {
       kind: 'lark',
       chatId,
       messageId,
-      label: messageId ? `飞书消息 ${messageId}` : `飞书会话 ${chatId}`,
+      label: messageId ? '打开飞书原消息' : '打开飞书群聊',
     }
   }
 
@@ -382,9 +398,15 @@ export function targetForEvent(event, options = {}) {
     }
     if (session.transcriptPath) {
       return {
-        kind: 'local-path',
-        path: session.transcriptPath,
-        label: '打开 Codex 记录',
+        kind: 'terminal-session',
+        provider: 'codex',
+        sessionId: session.sessionId,
+        threadId: session.threadId,
+        tty: event.tty || '',
+        cwd: session.cwd,
+        label: '打开 Codex 终端',
+        fallbackPath: session.transcriptPath,
+        allowRecordFallback: true,
       }
     }
     return null

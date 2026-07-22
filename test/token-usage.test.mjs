@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -73,6 +73,52 @@ test('codex attributes cumulative deltas to each turn day', () => {
   assert.equal(byDay['2026-06-14'], 100) // first turn delta
   assert.equal(byDay['2026-06-15'], 200) // 300 - 100, then 0
   assert.equal(byDay['2026-06-14'] + byDay['2026-06-15'], 300) // sum == last cumulative
+})
+
+test('codex reads token usage from the current payload.info event shape', () => {
+  const root = mkdtempSync(join(tmpdir(), 'kodama-codex-payload-info-'))
+  const sess = join(root, 'sessX')
+  mkdirSync(sess, { recursive: true })
+  const event = {
+    timestamp: '2026-06-15T10:00:00Z',
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: { total_tokens: 300 },
+        last_token_usage: { total_tokens: 300 },
+      },
+    },
+  }
+  writeFileSync(join(sess, 's.jsonl'), JSON.stringify(event) + '\n')
+
+  const byDay = usageByDay({ claudeRoot: '/nonexistent', codexRoot: root })
+
+  assert.equal(byDay['2026-06-15'], 300)
+})
+
+test('token usage scan stays within its byte budget and prioritizes recent files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'kodama-codex-budget-'))
+  const sess = join(root, 'sessX')
+  mkdirSync(sess, { recursive: true })
+  const oldFile = join(sess, 'old.jsonl')
+  const recentFile = join(sess, 'recent.jsonl')
+  const oldLine = JSON.stringify({ timestamp: '2026-06-14T10:00:00Z', total_token_usage: { total_tokens: 100 } }) + '\n'
+  const recentLine = JSON.stringify({ timestamp: '2026-06-15T10:00:00Z', total_token_usage: { total_tokens: 300 } }) + '\n'
+  writeFileSync(oldFile, oldLine)
+  writeFileSync(recentFile, recentLine)
+  utimesSync(oldFile, new Date('2026-06-14T10:00:00Z'), new Date('2026-06-14T10:00:00Z'))
+  utimesSync(recentFile, new Date('2026-06-15T10:00:00Z'), new Date('2026-06-15T10:00:00Z'))
+
+  const byDay = usageByDay({
+    claudeRoot: '/nonexistent',
+    codexRoot: root,
+    maxFileBytes: 1024,
+    scanBudgetBytes: Buffer.byteLength(recentLine),
+  })
+
+  assert.equal(byDay['2026-06-15'], 300)
+  assert.equal(byDay['2026-06-14'], undefined)
 })
 
 test('summarizeByDay rolls a day map into today/last7/total (used for the lark ledger)', () => {

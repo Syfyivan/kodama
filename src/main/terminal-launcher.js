@@ -14,13 +14,46 @@ function isOrcaAppPath(appPath) {
   return /\/Orca\.app$/i.test(String(appPath || ''))
 }
 
+function isCodexDesktopAppPath(appPath) {
+  return /\/(?:Codex|ChatGPT)\.app$/i.test(String(appPath || ''))
+}
+
+function codexThreadTargetForDetectedHost(target = {}, foundAppPath = '', options = {}) {
+  const provider = String(target.provider || '').trim().toLowerCase()
+  const threadId = String(target.threadId || target.sessionId || '').trim()
+  const hasLiveDesktopHost = isCodexDesktopAppPath(foundAppPath)
+  const hasDurableDesktopIdentity = !foundAppPath && options.isDesktopTranscript === true
+  if (provider !== 'codex' || !threadId || (!hasLiveDesktopHost && !hasDurableDesktopIdentity)) return null
+  return {
+    kind: 'codex-thread',
+    threadId,
+    url: `codex://threads/${encodeURIComponent(threadId)}`,
+  }
+}
+
 function shouldPreferOrca(launcher, foundAppPath) {
   const pref = normalizeTerminalLauncher(launcher)
   return pref === 'orca' || (pref === 'auto' && isOrcaAppPath(foundAppPath))
 }
 
+function shouldUseDetectedHostBeforeLauncher(launcher, foundAppPath) {
+  const pref = normalizeTerminalLauncher(launcher)
+  if (!foundAppPath || isOrcaAppPath(foundAppPath)) return false
+  if (pref === 'orca') return true
+  return pref === 'auto' && !isCmuxAppPath(foundAppPath)
+}
+
 function shouldTryCmux(launcher) {
   return normalizeTerminalLauncher(launcher) !== 'orca'
+}
+
+function orderAgentCandidates(rows = []) {
+  return [...rows].sort((a, b) => Boolean(normalizeTty(b?.tty)) - Boolean(normalizeTty(a?.tty)))
+}
+
+function normalizeTty(value) {
+  const tty = String(value || '').trim()
+  return tty && tty !== '??' && tty !== '?' && tty !== '-' ? tty : ''
 }
 
 function normalizeFsPath(value) {
@@ -91,8 +124,12 @@ module.exports = {
   normalizeTerminalLauncher,
   isCmuxAppPath,
   isOrcaAppPath,
+  isCodexDesktopAppPath,
+  codexThreadTargetForDetectedHost,
   shouldPreferOrca,
+  shouldUseDetectedHostBeforeLauncher,
   shouldTryCmux,
+  orderAgentCandidates,
   selectOrcaTerminal,
   statusMatchesTarget,
 }

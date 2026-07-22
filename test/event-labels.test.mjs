@@ -16,6 +16,8 @@ import {
   sessionRequestForEvent,
   targetForEvent,
   eventWorkId,
+  isOrcaRateLimitPath,
+  isLarkBridgeAgentEvent,
 } from '../src/renderer/event-labels.js'
 
 test('trae internal work directories do not become bubble project names', () => {
@@ -51,6 +53,24 @@ test('normal local agent events include both app and project', () => {
     cwd: '/Users/bytedance/code/kodama',
   }
   assert.equal(eventBubbleContext(event), 'Codex / kodama')
+})
+
+test('Orca rate-limit cwd is treated as an internal Claude usage session', () => {
+  const event = {
+    source: 'local',
+    type: 'task_done',
+    sessionId: '9c5b4e31-1aa7-4fc5-8ff3-0ae974d3d59c',
+    transcriptPath: '/Users/bytedance/.claude/projects/-Users-bytedance-Library-Application-Support-orca-rate-limit-pty-cwd/9c5b4e31-1aa7-4fc5-8ff3-0ae974d3d59c.jsonl',
+    cwd: '/Users/bytedance/Library/Application Support/orca/rate-limit-pty-cwd',
+  }
+
+  assert.equal(isOrcaRateLimitPath(event.cwd), true)
+  assert.equal(eventAppLabel(event), 'Claude Code')
+  assert.equal(eventWorkdirLabel(event), '')
+  assert.equal(eventProjectLabel(event), '')
+  assert.equal(eventBubbleContext(event), 'Claude Code')
+  assert.equal(sessionRequestForEvent(event), null)
+  assert.equal(targetForEvent(event), null)
 })
 
 test('common coding agents get readable app labels', () => {
@@ -102,17 +122,29 @@ test('local agent command progress is robot-labeled without fake Codex link', ()
   assert.equal(bridgeTaskShareRequestForEvent(event), null)
 })
 
-test('bridge-invoked local agent progress is labeled as Feishu bot work', () => {
+test('bridge-invoked agent events are presented simply as the Feishu bot', () => {
   const event = {
-    source: 'local',
-    type: 'task_progress',
+    source: 'lark',
+    type: 'task_done',
+    larkBridge: true,
     prompt: '你是通过飞书机器人被调用的 Codex，请用中文回答。',
-    cwd: '/Users/bytedance/code/lark-codex-bridge',
+    cwd: '/var/folders/demo/T/lark-codex-non-owner-zPEuvU',
+    chatId: 'oc_5224ef9ac280e85bdb2f19e4888b304a',
+    messageId: 'om_x100b6a7d7779b090b346f190f4daabb',
   }
-  assert.equal(eventActorLabel(event), '飞书机器人 Agent')
+  assert.equal(isLarkBridgeAgentEvent(event), true)
+  assert.equal(eventActorLabel(event), '飞书机器人')
+  assert.equal(eventBubbleContext(event), '飞书机器人')
+  assert.equal(eventWorkdirLabel(event), '')
+  assert.deepEqual(targetForEvent(event), {
+    kind: 'lark',
+    chatId: 'oc_5224ef9ac280e85bdb2f19e4888b304a',
+    messageId: 'om_x100b6a7d7779b090b346f190f4daabb',
+    label: '打开飞书原消息',
+  })
 })
 
-test('Codex transcript without desktop thread opens the local record only', () => {
+test('Codex transcript without desktop thread prefers terminal session', () => {
   const transcriptPath = '/Users/bytedance/.codex/sessions/2026/07/06/rollout-019f0000-1111-2222-3333-444444444444.jsonl'
   const event = {
     source: 'local',
@@ -123,9 +155,15 @@ test('Codex transcript without desktop thread opens the local record only', () =
   }
   assert.equal(sessionRequestForEvent(event)?.provider, 'codex')
   assert.deepEqual(targetForEvent(event), {
-    kind: 'local-path',
-    path: transcriptPath,
-    label: '打开 Codex 记录',
+    kind: 'terminal-session',
+    provider: 'codex',
+    sessionId: '019f0000-1111-2222-3333-444444444444',
+    threadId: '',
+    tty: '',
+    cwd: '/Users/bytedance/code/kodama',
+    label: '打开 Codex 终端',
+    fallbackPath: transcriptPath,
+    allowRecordFallback: true,
   })
 })
 

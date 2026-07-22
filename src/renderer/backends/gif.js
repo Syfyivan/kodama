@@ -1,6 +1,6 @@
 // GIF / sprite rendering backend — a single <img> whose source swaps by status
-// (and, with `stages`, by growth level). The default pet stays Live2D; this is
-// opt-in via config/render.local.js.
+// (and, with `stages`, by growth level). Kodama's built-in families use this
+// backend; config/render.local.js can still replace them with a private pack.
 //
 // Assets live in src/renderer/pets/<set>/. The bundled `slime` set is CC0 and
 // shipped; any other set is gitignored, so your own (possibly copyrighted) GIFs
@@ -14,7 +14,16 @@
 // When `stages` is set, the growth level picks the sprite (e.g. a slime that
 // changes color as it levels up) and that sprite is shown for every status —
 // evolution is conveyed by the stage art, not per-status animations.
+const ANIMATION_STATES = new Set(['idle', 'looking', 'working', 'replying', 'waiting', 'done', 'failed', 'tap'])
 const TRANSIENT = new Set(['done', 'failed', 'waiting', 'tap'])
+
+// CSS owns the motion vocabulary. Keep renderer input constrained to that
+// vocabulary so an unexpected backend status cannot strand the pet in a static
+// data-state with no matching animation.
+export function animationStateFor(state) {
+  const normalized = typeof state === 'string' ? state.trim().toLowerCase() : ''
+  return ANIMATION_STATES.has(normalized) ? normalized : 'idle'
+}
 
 // Pick the stage whose minLevel is the highest one still <= level. Order-independent
 // (doesn't assume `stages` is sorted), and falls back to the lowest-minLevel stage
@@ -33,18 +42,27 @@ export function pickStageFile(stages, level) {
   return chosen || lowest || ''
 }
 
+export function resolvePetImageSource(base, file, customSource = '') {
+  return String(customSource || '').trim() || `${base}${file}`
+}
+
 export function initGifBackend(cfg = {}) {
-  const base = `./pets/${cfg.set || 'default'}/`
-  const map = cfg.map || {}
-  const stages = Array.isArray(cfg.stages) ? cfg.stages : []
+  let base = `./pets/${cfg.set || 'default'}/`
+  let map = cfg.map || {}
+  let stages = Array.isArray(cfg.stages) ? cfg.stages : []
+  let currentLevel = 1
   let stageFile = stages.length ? pickStageFile(stages, 1) : ''
+  let customSource = ''
   const img = document.createElement('img')
   img.id = 'pet-gif'
   img.draggable = false
+  img.style.objectFit = 'contain'
   img.addEventListener('error', () => {
     const b = document.getElementById('bubble')
     if (b) {
-      b.textContent = `⚠️ 缺少 ${base}${img.getAttribute('data-file') || 'idle.gif'}`
+      b.textContent = customSource
+        ? '⚠️ 无法读取这个自定义形象'
+        : `⚠️ 缺少 ${base}${img.getAttribute('data-file') || 'idle.gif'}`
       b.classList.remove('hidden')
     }
   })
@@ -58,24 +76,40 @@ export function initGifBackend(cfg = {}) {
 
   // Compare the resolved file (not the state) so a stage swap re-renders even when
   // the status is unchanged.
-  function render(state) {
-    const file = fileFor(state)
-    if (img.getAttribute('data-file') === file) {
-      img.setAttribute('data-state', state)
+  function restartCssAnimation() {
+    // Repeated taps/completions should still feel responsive even when the
+    // sprite file and data-state are unchanged. This layout read happens only
+    // for a repeated transient reaction, never in the animation frame loop.
+    img.style.animation = 'none'
+    void img.offsetWidth
+    img.style.removeProperty('animation')
+  }
+
+  function render(state, { restart = false } = {}) {
+    const animationState = animationStateFor(state)
+    const file = fileFor(animationState)
+    const source = resolvePetImageSource(base, file, customSource)
+    const sameState = img.getAttribute('data-state') === animationState
+    if (img.getAttribute('data-source') === source) {
+      img.setAttribute('data-state', animationState)
+      if (restart && sameState) restartCssAnimation()
       return
     }
     img.setAttribute('data-file', file)
-    img.src = base + file
-    img.setAttribute('data-state', state)
+    img.setAttribute('data-source', source)
+    img.src = source
+    img.setAttribute('data-state', animationState)
+    if (restart && sameState) restartCssAnimation()
   }
 
   function show(state, transient) {
+    const animationState = animationStateFor(state)
     clearTimeout(revertTimer)
-    render(state)
+    render(animationState, { restart: transient })
     if (transient) {
       revertTimer = setTimeout(() => render(ongoing), 2600)
     } else {
-      ongoing = state
+      ongoing = animationState
     }
   }
 
@@ -93,16 +127,34 @@ export function initGifBackend(cfg = {}) {
     },
     // status from reactions (working/done/failed/waiting/looking/replying/idle)
     setStatus(status) {
-      if (status) show(status, TRANSIENT.has(status))
+      if (status) {
+        const animationState = animationStateFor(status)
+        show(animationState, TRANSIENT.has(animationState))
+      }
     },
     // growth level → evolution stage (no-op when `stages` isn't configured)
     setLevel(level) {
+      currentLevel = Math.max(1, Number(level) || 1)
       if (!stages.length) return
-      const next = pickStageFile(stages, Math.max(1, Number(level) || 1))
+      const next = pickStageFile(stages, currentLevel)
       if (next && next !== stageFile) {
         stageFile = next
         render(img.getAttribute('data-state') || ongoing)
       }
+    },
+    setPetPack(pack = {}) {
+      base = `./pets/${pack.set || 'default'}/`
+      map = pack.map || {}
+      stages = Array.isArray(pack.stages) ? pack.stages : []
+      stageFile = stages.length ? pickStageFile(stages, currentLevel) : ''
+      render(img.getAttribute('data-state') || ongoing)
+    },
+    setCustomSource(source) {
+      const next = String(source || '').trim()
+      if (next === customSource) return
+      customSource = next
+      img.setAttribute('data-custom-style', customSource ? 'true' : 'false')
+      render(img.getAttribute('data-state') || ongoing)
     },
   }
 }

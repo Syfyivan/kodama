@@ -8,9 +8,11 @@ const ACCESSORY_MARKUP = {
 let byId = new Map(ACCESSORIES.map((a) => [a.id, a]))
 
 let layer = null
+let growthLayer = null
 let getBounds = () => null
 let equipped = {}
 let renderedKey = ''
+let appearance = { skinId: 'forest', stageId: 'egg' }
 
 function ensureLayer() {
   if (layer) return layer
@@ -21,6 +23,27 @@ function ensureLayer() {
     document.body.appendChild(layer)
   }
   return layer
+}
+
+function ensureGrowthLayer() {
+  if (growthLayer) return growthLayer
+  growthLayer = document.getElementById('pet-growth-layer')
+  if (!growthLayer) {
+    growthLayer = document.createElement('div')
+    growthLayer.id = 'pet-growth-layer'
+    growthLayer.setAttribute('aria-hidden', 'true')
+    growthLayer.innerHTML = [
+      '<span class="spirit-aura"></span>',
+      '<span class="spirit-wing spirit-wing-left"></span>',
+      '<span class="spirit-wing spirit-wing-right"></span>',
+      '<span class="spirit-shell"></span>',
+      '<span class="spirit-spark spirit-spark-one"></span>',
+      '<span class="spirit-spark spirit-spark-two"></span>',
+      '<span class="spirit-spark spirit-spark-three"></span>',
+    ].join('')
+    document.body.appendChild(growthLayer)
+  }
+  return growthLayer
 }
 
 function equippedIds() {
@@ -55,12 +78,19 @@ function render() {
 
 function position() {
   const root = ensureLayer()
+  const growth = ensureGrowthLayer()
   const bounds = getBounds?.()
   if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
     root.classList.add('accessory-layer-hidden')
+    growth.classList.add('pet-growth-layer-hidden')
     return
   }
   root.classList.remove('accessory-layer-hidden')
+  growth.classList.remove('pet-growth-layer-hidden')
+  growth.style.left = `${bounds.x}px`
+  growth.style.top = `${bounds.y}px`
+  growth.style.width = `${bounds.width}px`
+  growth.style.height = `${bounds.height}px`
 
   for (const el of root.children) {
     const acc = byId.get(el.dataset.accessoryId)
@@ -88,11 +118,23 @@ export function initAccessoryLayer(boundsGetter, options = {}) {
     byId = new Map(options.accessories.map((a) => [a.id, a]))
   }
   ensureLayer()
+  ensureGrowthLayer()
   requestAnimationFrame(tick)
   return {
     setEquipped(nextEquipped = {}) {
       equipped = { ...nextEquipped }
       render()
+      position()
+    },
+    setAppearance(nextAppearance = {}) {
+      appearance = { ...appearance, ...nextAppearance }
+      const stageId = appearance.stageId || 'egg'
+      const skinId = appearance.skinId || 'forest'
+      const root = ensureGrowthLayer()
+      root.dataset.stage = stageId
+      root.dataset.skin = skinId
+      document.body.dataset.petStage = stageId
+      document.body.dataset.petSkin = skinId
       position()
     },
   }

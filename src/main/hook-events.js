@@ -65,6 +65,18 @@ function queryText(value) {
   }).filter(Boolean).join(' ')
 }
 
+function isLarkBridgeScratchPath(value) {
+  const normalized = String(value || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  return /(^|\/)lark-codex-non-owner-[^/]+$/i.test(normalized)
+}
+
+function larkBridgeRoute(prompt) {
+  const text = String(prompt || '')
+  const chatId = text.match(/当前群\s+chat_id\s*[：:]\s*(oc_[A-Za-z0-9]+)/i)?.[1] || ''
+  const messageId = text.match(/原始消息\s+message_id\s*[：:]\s*(om_[A-Za-z0-9]+)/i)?.[1] || ''
+  return { chatId, messageId }
+}
+
 function commandCategory(command) {
   const text = String(command || '')
   if (!text) return ''
@@ -174,6 +186,16 @@ function localContext(data) {
     task.project_name,
     task.projectName,
   )
+  const route = larkBridgeRoute(prompt)
+  const larkBridge = isLarkBridgeScratchPath(cwd)
+    || /通过飞书机器人被调用/.test(prompt)
+    || Boolean(route.chatId || route.messageId)
+  if (larkBridge) {
+    context.source = 'lark'
+    context.larkBridge = true
+  }
+  if (route.chatId) context.chatId = route.chatId
+  if (route.messageId) context.messageId = route.messageId
   if (prompt) context.prompt = clampText(prompt, 80)
   if (title) context.title = clampText(title, 80)
   if (projectName) context.projectName = clampText(projectName, 80)
@@ -270,6 +292,27 @@ function isCodexInternalMemoryEvent(data) {
   return isCodexInternalMemoryPath(context.cwd)
     || isCodexInternalMemoryPath(context.transcriptPath)
     || isCodexInternalMemoryPath(context.agentTranscriptPath)
+}
+
+function isOrcaRateLimitPath(value) {
+  return /(^|\/)Library\/Application Support\/orca\/rate-limit-pty-cwd$/i.test(String(value || '').replace(/\\/g, '/').replace(/\/+$/, ''))
+}
+
+function isEmptyOrcaRateLimitLifecycle(data, eventName) {
+  if (!['SessionStart', 'SessionEnd', 'Stop'].includes(eventName)) return false
+  const context = localContext(data)
+  if (!isOrcaRateLimitPath(context.cwd)) return false
+  return !firstString(
+    context.prompt,
+    context.title,
+    data?.message,
+    data?.summary,
+    data?.result_summary,
+    data?.resultSummary,
+    data?.last_assistant_message,
+    data?.lastAssistantMessage,
+    data?.error,
+  )
 }
 
 function codexNotifyToEvent(data) {
@@ -506,6 +549,7 @@ function mapHookToEvent(data) {
 
   // Codex `notify` payloads use `type` (no hook_event_name).
   const eventName = hookEventName(data)
+  if (isEmptyOrcaRateLimitLifecycle(data, eventName)) return null
   if (!eventName && data.type === 'agent-turn-complete') {
     const codex = codexNotifyToEvent(data)
     if (codex) return codex

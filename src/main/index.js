@@ -1,20 +1,30 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen, shell, clipboard, globalShortcut, Notification } = require('electron')
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, shell, clipboard, dialog, globalShortcut, Notification } = require('electron')
 const path = require('path')
 const http = require('http')
 const fs = require('fs')
 const { spawn } = require('child_process')
 const tokenUsage = require('./token-usage')
 const { createPomodoro } = require('./pomodoro')
+const { createCustomPetStyleStore } = require('./custom-pet-styles')
 const { mapHookToEvent } = require('./hook-events')
+const { createAgentEventContext } = require('./agent-event-context')
+const { larkChatUrls } = require('./lark-links')
+const { createLarkInbox } = require('./lark-inbox')
+const { createLarkMessageArchive } = require('./lark-message-archive')
+const { createLarkBaseSink } = require('./lark-base-sink')
+const { createLarkWebPush } = require('./lark-web-push')
 const { enrichTraeEvent } = require('./trae-context')
 const { HOOK_AGENTS } = require('./agents/registry')
 const {
   normalizeTerminalLauncher,
+  codexThreadTargetForDetectedHost,
   isCmuxAppPath,
   isOrcaAppPath,
   selectOrcaTerminal,
   shouldPreferOrca,
+  shouldUseDetectedHostBeforeLauncher,
   shouldTryCmux,
+  orderAgentCandidates,
 } = require('./terminal-launcher')
 const {
   registerAutoUpdater,
@@ -28,7 +38,7 @@ const {
   shareBridgeTasks: createBridgeTasksShare,
   shareSession: createSessionShare,
 } = require('./bridge-client')
-const { createCodexSessionTitleResolver } = require('./codex-session-index')
+const { createCodexSessionTitleResolver, isCodexDesktopTranscript } = require('./codex-session-index')
 
 // Local hook receiver port — declared early; referenced by top-level consts
 // (e.g. KODAMA_HOOK_CURL) that would otherwise hit the temporal dead zone.
@@ -53,6 +63,11 @@ let lastOpenedTarget = null
 let petHidden = false
 let topmostTimers = []
 let topmostInterval = null
+let larkInbox = null
+let larkArchive = null
+let larkBaseSink = null
+let larkWebPush = null
+let customPetStyleStore = null
 const resolveCodexSessionTitle = createCodexSessionTitleResolver()
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
@@ -80,6 +95,118 @@ process.on('unhandledRejection', (err) => {
 
 function sendToPet(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+}
+
+function larkInboxStateFile() {
+  return path.join(app.getPath('userData'), 'kodama-lark-inbox-state.json')
+}
+
+function getCustomPetStyleStore() {
+  if (!customPetStyleStore) {
+    customPetStyleStore = createCustomPetStyleStore({
+      directory: path.join(app.getPath('userData'), 'custom-pet-styles'),
+    })
+  }
+  return customPetStyleStore
+}
+
+function larkArchiveFile() {
+  return path.join(app.getPath('userData'), 'kodama-lark-messages.jsonl')
+}
+
+function larkBaseSinkStateFile() {
+  return path.join(app.getPath('userData'), 'kodama-lark-base-state.json')
+}
+
+function larkBaseSinkConfigFile() {
+  return path.join(app.getPath('userData'), 'kodama-lark-base-config.json')
+}
+
+function startLarkArchive() {
+  if (larkArchive) return larkArchive
+  larkArchive = createLarkMessageArchive({
+    file: larkArchiveFile(),
+    onUpdate() {
+      refreshTray()
+    },
+  })
+  return larkArchive
+}
+
+function startLarkBaseSink() {
+  if (larkBaseSink) return larkBaseSink
+  larkBaseSink = createLarkBaseSink({
+    configFile: larkBaseSinkConfigFile(),
+    stateFile: larkBaseSinkStateFile(),
+    onUpdate() {
+      refreshTray()
+    },
+  })
+  seedLarkBaseSinkFromArchive()
+  return larkBaseSink
+}
+
+function larkBaseBackfillLimit() {
+  const n = Number(process.env.KODAMA_LARK_BASE_BACKFILL_LIMIT || 500)
+  if (!Number.isFinite(n)) return 500
+  return Math.min(5000, Math.max(0, Math.round(n)))
+}
+
+function seedLarkBaseSinkFromArchive() {
+  const summary = larkBaseSink?.getSummary?.()
+  if (!summary?.enabled || !summary.baseTokenConfigured) return 0
+  const archive = larkArchive || startLarkArchive()
+  const archived = archive.getRecent(larkBaseBackfillLimit())
+  const queued = larkBaseSink.ingest(archived)
+  if (queued.length) console.error(`[kodama] queued ${queued.length} archived lark messages for base sync`)
+  return queued.length
+}
+
+function archiveLarkMessages(messages, meta = {}) {
+  const archived = startLarkArchive().ingest(messages, meta)
+  if (archived.length) startLarkBaseSink().ingest(archived)
+  return archived
+}
+
+function startLarkInbox() {
+  if (larkInbox) return larkInbox
+  larkInbox = createLarkInbox({
+    stateFile: larkInboxStateFile(),
+    onUpdate(snapshot, meta = {}) {
+      sendToPet('pet:lark-inbox-updated', snapshot)
+      archiveLarkMessages(snapshot.messages || [], { source: meta.reason || meta.source || 'inbox' })
+      const newMessages = Array.isArray(meta.newMessages) ? meta.newMessages : []
+      if (!newMessages.length) return
+      const chatNames = Array.from(new Set(newMessages.map(message => message.chatName).filter(Boolean))).slice(0, 3)
+      const first = newMessages[0] || {}
+      emitRendererAgentEvent({
+        type: 'lark_message_received',
+        source: 'lark',
+        text: `${chatNames.length || 1} 个群有 ${newMessages.length} 条新消息${chatNames.length ? `：${chatNames.join('、')}` : ''}`,
+        chatId: first.chatId || '',
+        messageId: first.messageId || '',
+      })
+    },
+  })
+  larkInbox.start()
+  return larkInbox
+}
+
+function startLarkWebPush() {
+  if (larkWebPush) return larkWebPush
+  larkWebPush = createLarkWebPush({
+    BrowserWindow,
+    onStatus(status) {
+      sendToPet('pet:lark-web-push-updated', status)
+      refreshTray()
+    },
+    onMessages(messages, meta = {}) {
+      if (!larkInbox) startLarkInbox()
+      larkInbox.ingestMessages(messages, { ...meta, reason: 'web-push' })
+    },
+  })
+  larkWebPush.start()
+  return larkWebPush
 }
 
 function combinedWorkAreaBounds(displays = screen.getAllDisplays()) {
@@ -356,6 +483,7 @@ const windowStateFile = () => path.join(app.getPath('userData'), 'kodama-window.
 // they carry the surface id; pinning it here brings us to parity.
 const sessionTtyFile = () => path.join(app.getPath('userData'), 'kodama-session-tty.json')
 let sessionTtyCache = new Map()
+const agentEventContext = createAgentEventContext()
 let sessionTtySaveTimer = null
 function loadSessionTtyCache() {
   try {
@@ -692,17 +820,6 @@ ipcMain.on('pet:set-hidden', (_e, hidden) => {
   setPetHidden(hidden)
 })
 
-function larkChatUrls(chatId) {
-  const id = String(chatId || '').trim()
-  if (!/^oc_[A-Za-z0-9]+$/.test(id)) return []
-  const encoded = encodeURIComponent(id)
-  return [
-    `https://applink.feishu.cn/client/chat/open?openChatId=${encoded}`,
-    `https://applink.larksuite.com/client/chat/open?openChatId=${encoded}`,
-    `lark://applink.feishu.cn/client/chat/open?openChatId=${encoded}`,
-  ]
-}
-
 function safeExternalUrls(target) {
   const direct = String(target?.url || '').trim()
   if (direct) {
@@ -713,7 +830,7 @@ function safeExternalUrls(target) {
       return []
     }
   }
-  return larkChatUrls(target?.chatId)
+  return larkChatUrls(target?.chatId, target?.messageId)
 }
 
 function isUnderPath(child, parent) {
@@ -904,13 +1021,16 @@ async function findCliSessionTarget(target) {
 
   // 1) Strongest signal: the agent process carries the session id on its argv.
   let hit = sessionId
-    ? rows.find((row) => row.command.includes(sessionId) && isAgentCommand(row.command))
+    ? rows.find((row) => row.command.includes(sessionId) && isAgentCommand(row.command) && normalizeTty(row.tty))
     : null
 
   // 2) Fallback: match a running agent by working directory (Claude Code rarely
   //    puts the session id on argv, which is why jumps used to miss the tty).
   if (!hit && cwd) {
-    const agents = rows.filter((row) => isAgentCommand(row.command) && normalizeTty(row.tty))
+    // Terminal-hosted agents remain the strongest cwd match, but Codex App's
+    // app-server intentionally has no tty. Keep it as a fallback so its .app
+    // ancestor can override a stale explicit Orca preference.
+    const agents = orderAgentCandidates(rows.filter((row) => isAgentCommand(row.command)))
     for (const row of agents) {
       if (await processCwd(row.pid) === cwd) { hit = row; break }
     }
@@ -1388,6 +1508,64 @@ async function openTerminalSessionTarget(target) {
   const foundAppPath = String(found?.appPath || '')
   const launcher = terminalLauncherPreference()
 
+  const transcriptPath = String(
+    target?.transcriptPath || target?.agentTranscriptPath || target?.fallbackPath || '',
+  ).trim()
+  const isDesktopTranscript = !foundAppPath && isCodexDesktopTranscript(transcriptPath, {
+    sessionId: target?.sessionId || target?.threadId,
+  })
+  const codexThreadTarget = codexThreadTargetForDetectedHost(target, foundAppPath, {
+    isDesktopTranscript,
+  })
+  if (codexThreadTarget) {
+    try {
+      const opened = await openExternalTarget(codexThreadTarget.url)
+      logJump('Codex thread', {
+        session: target?.sessionId || '',
+        threadId: codexThreadTarget.threadId,
+        appPath: foundAppPath,
+        method: opened.method,
+      })
+      return {
+        ok: true,
+        method: opened.method,
+        url: codexThreadTarget.url,
+        threadId: codexThreadTarget.threadId,
+        appPath: foundAppPath,
+        pid: found?.pid || null,
+      }
+    } catch (err) {
+      logJump('Codex thread failed', {
+        session: target?.sessionId || '',
+        threadId: codexThreadTarget.threadId,
+        appPath: foundAppPath,
+        error: err?.message || String(err),
+      })
+    }
+  }
+
+  if (shouldUseDetectedHostBeforeLauncher(launcher, foundAppPath)) {
+    if (rec.tty && await activateTerminalTty(rec.tty)) {
+      logJump('Terminal tty', {
+        session: target?.sessionId || '',
+        tty: rec.tty,
+        reason: 'detected-host-before-launcher',
+        preference: launcher,
+        appPath: foundAppPath,
+      })
+      return { ok: true, method: 'Terminal tty', tty: rec.tty, pid: found?.pid || null }
+    }
+    if (await openAppPath(foundAppPath)) {
+      logJump('open host app', {
+        session: target?.sessionId || '',
+        appPath: foundAppPath,
+        reason: 'detected-host-before-launcher',
+        preference: launcher,
+      })
+      return { ok: true, method: 'open host app', appPath: foundAppPath, tty: rec.tty, pid: found.pid }
+    }
+  }
+
   // If Claude is running inside Orca, opening Orca is more faithful than cmux.
   // Explicit cmux preference still wins for users who want cmux as the launcher.
   if (shouldPreferOrca(launcher, foundAppPath)) {
@@ -1468,11 +1646,24 @@ async function openExternalTarget(url) {
   return { ok: true, method: 'shell.openExternal' }
 }
 
-ipcMain.handle('pet:open-target', async (_e, target) => {
+async function openTargetPayload(target) {
   if (target?.kind === 'terminal-session') {
     const result = await openTerminalSessionTarget(target)
     if (result.ok) {
       lastOpenedTarget = { ...result, at: new Date().toISOString(), target }
+      return result
+    }
+    if (target?.allowRecordFallback && target?.fallbackPath) {
+      const fallback = await openLocalTarget({ path: target.fallbackPath })
+      if (fallback.ok) {
+        const next = {
+          ...fallback,
+          method: `fallback ${fallback.method}`,
+          terminalError: result.error,
+        }
+        lastOpenedTarget = { ...next, at: new Date().toISOString(), target }
+        return next
+      }
     }
     return result
   }
@@ -1499,6 +1690,10 @@ ipcMain.handle('pet:open-target', async (_e, target) => {
   }
   clipboard.writeText(urls[0])
   return { ok: false, error: lastError || 'open-target-failed', copiedUrl: urls[0] }
+}
+
+ipcMain.handle('pet:open-target', async (_e, target) => {
+  return openTargetPayload(target)
 })
 
 ipcMain.handle('pet:get-last-opened-target', () => lastOpenedTarget?.target || null)
@@ -1673,6 +1868,45 @@ ipcMain.handle('pet:read-text', () => {
   return { ok: true, text: clipboard.readText() }
 })
 
+ipcMain.handle('pet:lark-inbox', () => {
+  return larkInbox?.getSnapshot?.() || { ok: false, enabled: false, error: 'lark inbox not started', chats: [], messages: [] }
+})
+
+ipcMain.handle('pet:lark-inbox-refresh', async () => {
+  if (!larkInbox) startLarkInbox()
+  return larkInbox.refresh({ reason: 'manual' })
+})
+
+ipcMain.handle('pet:lark-base-sink', () => {
+  return startLarkBaseSink().getSummary()
+})
+
+ipcMain.handle('pet:lark-base-open', async () => {
+  const summary = startLarkBaseSink().getSummary()
+  if (!summary.url) return { ok: false, error: 'lark base is not configured' }
+  await shell.openExternal(summary.url)
+  return { ok: true, url: summary.url }
+})
+
+ipcMain.handle('pet:lark-web-push-status', () => {
+  return larkWebPush?.getStatus?.() || { ok: false, enabled: false, running: false, error: 'lark web push not started' }
+})
+
+ipcMain.handle('pet:lark-web-push-open', () => {
+  if (!larkWebPush) startLarkWebPush()
+  return larkWebPush.showWindow()
+})
+
+ipcMain.handle('pet:lark-web-push-reload', () => {
+  if (!larkWebPush) startLarkWebPush()
+  return larkWebPush.reload({ show: true })
+})
+
+ipcMain.on('pet:lark-web-push-raw', (_event, data) => {
+  if (!larkWebPush) startLarkWebPush()
+  larkWebPush.handlePush(data)
+})
+
 // Growth state (level/exp/food) persisted in userData. (P4)
 const stateFile = () => path.join(app.getPath('userData'), 'kodama-state.json')
 ipcMain.handle('pet:get-state', () => {
@@ -1688,6 +1922,33 @@ ipcMain.on('pet:save-state', (_e, state) => {
   } catch (err) {
     console.error(`[kodama] save state failed: ${err.message}`)
   }
+})
+
+ipcMain.handle('pet:custom-styles', () => getCustomPetStyleStore().getSnapshot())
+ipcMain.handle('pet:custom-style-import', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '选择桌宠形象',
+    buttonLabel: '使用这个形象',
+    properties: ['openFile'],
+    filters: [
+      { name: '桌宠图片', extensions: ['png', 'gif', 'webp', 'jpg', 'jpeg'] },
+    ],
+  })
+  if (result.canceled || !result.filePaths?.[0]) return { ok: false, canceled: true }
+  try {
+    const imported = getCustomPetStyleStore().importFile(result.filePaths[0])
+    return { ...imported, snapshot: getCustomPetStyleStore().getSnapshot() }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) }
+  }
+})
+ipcMain.handle('pet:custom-style-activate', (_event, id) => {
+  const result = getCustomPetStyleStore().activate(id)
+  return { ...result, snapshot: getCustomPetStyleStore().getSnapshot() }
+})
+ipcMain.handle('pet:custom-style-delete', (_event, id) => {
+  const result = getCustomPetStyleStore().remove(id)
+  return { ...result, snapshot: getCustomPetStyleStore().getSnapshot() }
 })
 
 ipcMain.on('pet:accessory-menu', (_e, state) => {
@@ -1815,6 +2076,7 @@ const EMPTY_TOKEN_STATS = Object.freeze({
 let tokenStatsCache = { ...EMPTY_TOKEN_STATS, local: { ...EMPTY_TOKEN_STATS.local }, lark: { ...EMPTY_TOKEN_STATS.lark } }
 let tokenStatsUpdatedAt = 0
 let tokenStatsRefreshPromise = null
+let localTokenStatsReady = false
 
 function mergeTokenStats(local, lark) {
   return {
@@ -1889,7 +2151,7 @@ async function computeMergedTokenStatsOffMainThread() {
 
 function refreshTokenStats({ force = false } = {}) {
   const maxAgeMs = 5 * 60 * 1000
-  if (!force && tokenStatsUpdatedAt && Date.now() - tokenStatsUpdatedAt < maxAgeMs) {
+  if (!force && localTokenStatsReady && tokenStatsUpdatedAt && Date.now() - tokenStatsUpdatedAt < maxAgeMs) {
     return Promise.resolve(tokenStatsCache)
   }
   if (tokenStatsRefreshPromise) return tokenStatsRefreshPromise
@@ -1898,6 +2160,7 @@ function refreshTokenStats({ force = false } = {}) {
     .then((stats) => {
       tokenStatsCache = stats
       tokenStatsUpdatedAt = Date.now()
+      localTokenStatsReady = true
       return tokenStatsCache
     })
     .catch((err) => {
@@ -1935,12 +2198,14 @@ ipcMain.on('pet:add-lark-tokens', (_e, tokens) => {
 // Cross-source token stats: local JSONL (direct) + lark ledger (Feishu), merged.
 // Local Codex history can be gigabytes; keep the UI/hook server responsive by
 // returning the last cache immediately and refreshing the expensive scan later.
-ipcMain.handle('pet:token-stats', () => {
+ipcMain.handle('pet:token-stats', async () => {
   try {
-    return getCachedTokenStats()
+    if (!localTokenStatsReady) await refreshTokenStats({ force: true })
+    else refreshTokenStats()
+    return { ...tokenStatsCache, ready: localTokenStatsReady }
   } catch (err) {
     console.error(`[kodama] token stats failed: ${err.message}`)
-    return tokenStatsCache
+    return { ...tokenStatsCache, ready: false }
   }
 })
 
@@ -2274,12 +2539,82 @@ function startLocalAgentServer() {
         },
         updateStatus: getUpdateStatus(),
         tokenStats: tokenStatsCache,
+        larkInbox: larkInbox?.getSummary?.() || null,
+        larkArchive: larkArchive?.getSummary?.() || null,
+        larkBaseSink: larkBaseSink?.getSummary?.() || null,
+        larkWebPush: larkWebPush?.getStatus?.() || null,
         loginItemEnabled: isLoginItemEnabled(),
       })
       return
     }
     if (req.method === 'GET' && url.pathname === '/pet/token-stats') {
       writeJson(res, 200, { ok: true, ...getCachedTokenStats() })
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/pet/lark-inbox') {
+      writeJson(res, 200, larkInbox?.getSnapshot?.() || { ok: false, enabled: false, error: 'lark inbox not started', chats: [], messages: [] })
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/pet/lark-archive') {
+      const archive = startLarkArchive()
+      const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)))
+      writeJson(res, 200, { ...archive.getSummary(), messages: archive.getRecent(limit) })
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/pet/lark-base-sink') {
+      writeJson(res, 200, startLarkBaseSink().getSummary())
+      return
+    }
+    if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/pet/lark-base-open') {
+      if (isCrossSiteBrowserRequest(req)) {
+        res.writeHead(403)
+        res.end()
+        return
+      }
+      const summary = startLarkBaseSink().getSummary()
+      if (!summary.url) {
+        writeJson(res, 404, { ok: false, error: 'lark base is not configured' })
+        return
+      }
+      shell.openExternal(summary.url)
+        .then(() => writeJson(res, 200, { ok: true, url: summary.url }))
+        .catch(err => writeJson(res, 500, { ok: false, error: err?.message || String(err) }))
+      return
+    }
+    if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/pet/lark-inbox-refresh') {
+      if (isCrossSiteBrowserRequest(req)) {
+        res.writeHead(403)
+        res.end()
+        return
+      }
+      if (!larkInbox) startLarkInbox()
+      larkInbox.refresh({ reason: 'manual' })
+        .then(snapshot => writeJson(res, 200, snapshot))
+        .catch(err => writeJson(res, 500, { ok: false, error: err?.message || String(err) }))
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/pet/lark-web-push') {
+      writeJson(res, 200, larkWebPush?.getStatus?.() || { ok: false, enabled: false, running: false, error: 'lark web push not started' })
+      return
+    }
+    if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/pet/lark-web-push-open') {
+      if (isCrossSiteBrowserRequest(req)) {
+        res.writeHead(403)
+        res.end()
+        return
+      }
+      if (!larkWebPush) startLarkWebPush()
+      writeJson(res, 200, larkWebPush.showWindow())
+      return
+    }
+    if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/pet/lark-web-push-reload') {
+      if (isCrossSiteBrowserRequest(req)) {
+        res.writeHead(403)
+        res.end()
+        return
+      }
+      if (!larkWebPush) startLarkWebPush()
+      writeJson(res, 200, larkWebPush.reload({ show: true }))
       return
     }
     const controlMatch = url.pathname.match(/^\/pet\/(show|hide|toggle|panel|reset-position|bridge-tasks|manage)$/)
@@ -2294,6 +2629,11 @@ function startLocalAgentServer() {
     }
     if (req.method !== 'POST') {
       res.writeHead(405)
+      res.end()
+      return
+    }
+    if (url.pathname === '/pet/open-target' && isCrossSiteBrowserRequest(req)) {
+      res.writeHead(403)
       res.end()
       return
     }
@@ -2361,8 +2701,14 @@ function startLocalAgentServer() {
         writeJson(res, 200, { ok: true, event: mcpEvent })
         return
       }
+      if (url.pathname === '/pet/open-target') {
+        openTargetPayload(data)
+          .then(result => writeJson(res, result?.ok ? 200 : 500, result))
+          .catch(err => writeJson(res, 500, { ok: false, error: err?.message || String(err) }))
+        return
+      }
       const hookData = decorateHookPayloadForEndpoint(data, url)
-      const event = enrichTraeEvent(mapHookToEvent(hookData), hookData)
+      const event = agentEventContext.enrich(enrichTraeEvent(mapHookToEvent(hookData), hookData))
       const receipt = recordHookReceipt(hookData, event, url.pathname)
       if (event) {
         const sid = event.sessionId || event.session_id
@@ -2474,6 +2820,41 @@ function refreshTray() {
   })
   items.push({ label: 'Bridge 任务详情', click: () => createBridgeTasksWindow() })
   items.push({
+    label: '刷新飞书群消息',
+    click: () => {
+      if (!larkInbox) startLarkInbox()
+      larkInbox.refresh({ reason: 'manual' })
+        .then((snapshot) => {
+          sendToPet('pet:lark-inbox-updated', snapshot)
+          try {
+            new Notification({
+              title: 'Kodama · 飞书群消息',
+              body: snapshot.ok
+                ? `已读取 ${snapshot.chatCount || 0} 个群，${snapshot.messageCount || 0} 条最近消息`
+                : `读取失败：${snapshot.error || '未知错误'}`,
+            }).show()
+          } catch { /* notification is best-effort */ }
+        })
+        .catch((err) => {
+          try { new Notification({ title: 'Kodama · 飞书群消息', body: `读取失败：${err?.message || err}` }).show() } catch { /* ignore */ }
+        })
+    },
+  })
+  items.push({
+    label: '打开飞书实时窗口',
+    click: () => {
+      if (!larkWebPush) startLarkWebPush()
+      larkWebPush.showWindow()
+    },
+  })
+  items.push({
+    label: '重载飞书实时窗口',
+    click: () => {
+      if (!larkWebPush) startLarkWebPush()
+      larkWebPush.reload({ show: true })
+    },
+  })
+  items.push({
     label: petUiMenuState.dndMode ? '退出勿扰模式' : '进入勿扰模式',
     click: () => sendToPet('pet:set-dnd-mode', !petUiMenuState.dndMode),
   })
@@ -2504,8 +2885,13 @@ function refreshTray() {
     items.push({ type: 'separator' }, ...updateMenuItems)
   }
   const larkToday = stats.lark?.today || 0
+  const inboxSummary = larkInbox?.getSummary?.()
+  const webPushSummary = larkWebPush?.getStatus?.()
   items.push(
     { type: 'separator' },
+    { label: `飞书群消息：${inboxSummary?.messageCount || 0} 条 / ${inboxSummary?.chatCount || 0} 群`, enabled: false },
+    { label: inboxSummary?.updatedAt ? `　更新：${new Date(inboxSummary.updatedAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}` : '　尚未读取', enabled: false },
+    { label: `飞书实时：${webPushSummary?.enabled === false ? '关闭' : webPushSummary?.running ? (webPushSummary.injected ? '已注入' : '运行中') : '未运行'}`, enabled: false },
     { label: `今日 token：${fmtTokens(stats.today)}`, enabled: false },
     { label: `　飞书：${fmtTokens(larkToday)} / 本地：${fmtTokens(stats.today - larkToday)}`, enabled: false },
     { label: `近 7 天：${fmtTokens(stats.last7)}`, enabled: false },
@@ -2575,6 +2961,10 @@ app.whenReady().then(() => {
     onStatusChange: () => refreshTray(),
     notifyPet: (payload) => sendToPet('pet-notify', payload),
   })
+  startLarkArchive()
+  startLarkBaseSink()
+  startLarkInbox()
+  startLarkWebPush()
   registerGlobalShortcuts()
   refreshTokenStats({ force: true })
   topmostInterval = setInterval(reassertTopmost, 15 * 1000)
@@ -2614,6 +3004,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  larkInbox?.stop?.()
+  larkBaseSink?.stop?.()
+  larkWebPush?.stop?.()
   disposeAutoUpdater()
   globalShortcut.unregisterAll()
 })

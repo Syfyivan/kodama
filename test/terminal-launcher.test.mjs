@@ -1,14 +1,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  codexThreadTargetForDetectedHost,
   normalizeTerminalLauncher,
+  orderAgentCandidates,
   isCmuxAppPath,
   isOrcaAppPath,
   selectOrcaTerminal,
   shouldPreferOrca,
+  shouldUseDetectedHostBeforeLauncher,
   shouldTryCmux,
   statusMatchesTarget,
 } from '../src/main/terminal-launcher.js'
+
+test('agent discovery keeps app-hosted Codex processes as a fallback', () => {
+  const appHosted = { pid: 1, tty: '??', command: '/Applications/ChatGPT.app/Contents/Resources/codex app-server' }
+  const terminalHosted = { pid: 2, tty: 'ttys003', command: 'codex' }
+  assert.deepEqual(orderAgentCandidates([appHosted]), [appHosted])
+  assert.deepEqual(orderAgentCandidates([appHosted, terminalHosted]), [terminalHosted, appHosted])
+})
 
 test('terminal launcher preference normalizes to a safe default', () => {
   assert.equal(normalizeTerminalLauncher('orca'), 'orca')
@@ -30,6 +40,62 @@ test('auto prefers Orca only when the live agent host is Orca', () => {
   assert.equal(shouldPreferOrca('auto', '/Applications/Terminal.app'), false)
   assert.equal(shouldPreferOrca('cmux', '/Applications/Orca.app'), false)
   assert.equal(shouldPreferOrca('orca', ''), true)
+})
+
+test('launcher fallback yields to a detected non-terminal host app', () => {
+  assert.equal(shouldUseDetectedHostBeforeLauncher('orca', '/Applications/Codex.app'), true)
+  assert.equal(shouldUseDetectedHostBeforeLauncher('orca', '/Applications/Terminal.app'), true)
+  assert.equal(shouldUseDetectedHostBeforeLauncher('auto', '/Applications/ChatGPT.app'), true)
+  assert.equal(shouldUseDetectedHostBeforeLauncher('orca', '/Applications/Orca.app'), false)
+  assert.equal(shouldUseDetectedHostBeforeLauncher('auto', '/Applications/cmux.app'), false)
+  assert.equal(shouldUseDetectedHostBeforeLauncher('cmux', '/Applications/ChatGPT.app'), false)
+  assert.equal(shouldUseDetectedHostBeforeLauncher('orca', ''), false)
+})
+
+test('app-hosted Codex session keeps its exact desktop thread deep link', () => {
+  const target = {
+    kind: 'terminal-session',
+    provider: 'codex',
+    sessionId: '019f4ecd-3fbe-7383-8331-6c38161d8362',
+  }
+
+  assert.deepEqual(
+    codexThreadTargetForDetectedHost(target, '/Applications/ChatGPT.app'),
+    {
+      kind: 'codex-thread',
+      threadId: '019f4ecd-3fbe-7383-8331-6c38161d8362',
+      url: 'codex://threads/019f4ecd-3fbe-7383-8331-6c38161d8362',
+    },
+  )
+  assert.equal(
+    codexThreadTargetForDetectedHost(target, '/Applications/cmux.app'),
+    null,
+  )
+  assert.equal(
+    codexThreadTargetForDetectedHost({ ...target, provider: 'claude' }, '/Applications/ChatGPT.app'),
+    null,
+  )
+})
+
+test('inactive Codex Desktop session keeps its exact thread without falling through to cmux', () => {
+  const target = {
+    kind: 'terminal-session',
+    provider: 'codex',
+    sessionId: '019f4ad6-506c-71a3-9484-6a53419c8ec4',
+  }
+
+  assert.deepEqual(
+    codexThreadTargetForDetectedHost(target, '', { isDesktopTranscript: true }),
+    {
+      kind: 'codex-thread',
+      threadId: '019f4ad6-506c-71a3-9484-6a53419c8ec4',
+      url: 'codex://threads/019f4ad6-506c-71a3-9484-6a53419c8ec4',
+    },
+  )
+  assert.equal(
+    codexThreadTargetForDetectedHost(target, '/Applications/cmux.app', { isDesktopTranscript: true }),
+    null,
+  )
 })
 
 test('Orca preference disables cmux fallback', () => {

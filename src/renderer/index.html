@@ -25,12 +25,12 @@
   <body>
     <canvas id="pet-canvas"></canvas>
     <div id="bubble" class="hidden"></div>
-    <section id="event-panel" class="hidden" aria-live="polite">
+    <section id="event-panel" class="hidden">
       <header class="panel-header">
         <strong><span class="drag-handle" title="拖动移动桌宠">⠿</span> 事件 / 配置</strong>
         <button id="event-panel-close" type="button" title="关闭">×</button>
       </header>
-      <div id="panel-status" class="panel-status"></div>
+      <div id="panel-status" class="panel-status" aria-live="polite"></div>
       <div class="panel-actions">
         <button id="bridge-tasks-open" type="button" title="打开 Bridge 完整任务详情页">Bridge 任务详情</button>
         <button id="manage-open" type="button" title="打开 Kodama 管理 / 设置中心(独立窗口)">管理中心</button>
@@ -38,22 +38,94 @@
       <div class="panel-metrics">
         <button type="button" data-tab="waiting"><span id="metric-waiting">0</span><small>待交互</small></button>
         <button type="button" data-tab="done"><span id="metric-done">0</span><small>已完成</small></button>
+        <button type="button" data-tab="lark-inbox"><span id="metric-inbox">0</span><small>群聊</small></button>
         <button type="button" data-tab="recent"><span id="metric-total">0</span><small>事件</small></button>
       </div>
       <nav id="panel-tabs" class="panel-tabs" aria-label="事件面板">
+        <button type="button" data-tab="appearance" aria-label="精灵衣橱" title="精灵衣橱">衣橱</button>
         <button type="button" data-tab="settings" aria-label="设置" title="设置">设置</button>
         <button type="button" data-tab="waiting" aria-label="待交互" title="待交互">待办</button>
         <button type="button" data-tab="done" aria-label="已完成" title="已完成">完成</button>
         <button type="button" data-tab="sessions" aria-label="会话" title="会话">会话</button>
+        <button type="button" data-tab="lark-inbox" aria-label="飞书群消息" title="飞书群消息">群聊</button>
         <button type="button" data-tab="bridge" aria-label="Bridge 任务" title="Bridge 任务">Bridge</button>
         <button type="button" data-tab="recent" aria-label="最近事件" title="最近事件">最近</button>
       </nav>
+      <div id="appearance-panel" class="panel-section tab-panel appearance-panel" data-tab-panel="appearance">
+        <div class="appearance-heading">
+          <div>
+            <small>我的精灵</small>
+            <h2 id="appearance-stage-name">芽生之蛋</h2>
+          </div>
+          <span id="appearance-level" class="appearance-level">Lv.1</span>
+        </div>
+        <p id="appearance-stage-copy" class="appearance-stage-copy">正在听你和 Agent 的声音
+        </p>
+        <div class="growth-progress" aria-label="成长进度">
+          <div class="growth-progress-track"><i id="appearance-progress-bar"></i></div>
+          <span id="appearance-progress-label">0 / 20 经验</span>
+        </div>
+        <div id="growth-journey-card" class="growth-journey-card" data-stage="egg">
+          <div class="growth-journey-head">
+            <span id="growth-journey-badge" class="hatch-badge">孵化中</span>
+            <strong id="growth-journey-title">下一站 · 林间幼灵</strong>
+          </div>
+          <p id="growth-journey-copy">继续和 Agent 一起工作，使用的 token 会变成成长能量</p>
+          <div class="growth-journey-track"><i id="growth-journey-bar"></i></div>
+          <div class="growth-journey-token">
+            <span id="growth-journey-progress">0 / 170 成长经验</span>
+            <span id="growth-token-progress">0 / 100000 token</span>
+          </div>
+          <button id="growth-restart" class="growth-restart" type="button">重新孵化一颗蛋</button>
+        </div>
+        <section class="wardrobe-section pet-family-section" aria-labelledby="pet-family-label">
+          <div class="wardrobe-title">
+            <div>
+              <strong id="pet-family-label">选择伙伴</strong>
+              <span>每一只都从蛋开始成长</span>
+            </div>
+          </div>
+          <div id="pet-family-options" class="pet-family-options"></div>
+        </section>
+        <section class="wardrobe-section custom-style-section" aria-labelledby="custom-style-label">
+          <div class="wardrobe-title">
+            <div>
+              <strong id="custom-style-label">自定义形象</strong>
+              <span>PNG · GIF · WebP · JPG</span>
+            </div>
+            <button id="custom-style-upload" class="wardrobe-feed custom-style-upload" type="button">＋ 上传</button>
+          </div>
+          <p class="custom-style-help">上传后仍会响应工作、等待、完成和点击动画</p>
+          <div id="custom-style-options" class="custom-style-options"></div>
+        </section>
+        <section class="wardrobe-section" aria-labelledby="growth-stage-label">
+          <div class="wardrobe-title">
+            <strong id="growth-stage-label">成长形态</strong>
+            <span>默认随等级进化</span>
+          </div>
+          <div id="growth-stage-options" class="growth-stage-options"></div>
+        </section>
+        <section class="wardrobe-section" aria-labelledby="skin-label">
+          <div class="wardrobe-title">
+            <strong id="skin-label">光影皮肤</strong>
+            <span>即时生效</span>
+          </div>
+          <div id="skin-options" class="skin-options"></div>
+        </section>
+        <section class="wardrobe-section" aria-labelledby="outfit-label">
+          <div class="wardrobe-title">
+            <strong id="outfit-label">今日装扮</strong>
+            <button id="appearance-feed" class="wardrobe-feed" type="button">投喂成长</button>
+          </div>
+          <div id="outfit-options" class="outfit-options"></div>
+        </section>
+      </div>
       <div class="panel-section tab-panel" data-tab-panel="settings">
         <h2>设置</h2>
         <div class="settings-list">
           <label>
             <span>图案大小</span>
-            <input id="setting-pet-scale" type="range" min="40" max="125" step="5" />
+            <input id="setting-pet-scale" type="range" min="20" max="125" step="5" />
             <output id="setting-pet-scale-value"></output>
           </label>
           <label>
@@ -216,6 +288,17 @@
         <h2>会话</h2>
         <div id="session-events" class="event-list empty">暂无可跳转会话</div>
       </div>
+      <div class="panel-section tab-panel" data-tab-panel="lark-inbox">
+        <h2>飞书群消息</h2>
+        <div class="lark-inbox-tools">
+          <button id="lark-inbox-refresh" type="button">刷新</button>
+          <button id="lark-web-push-open" type="button">实时登录</button>
+          <button id="lark-web-push-reload" type="button">重载实时</button>
+          <button id="lark-base-open" type="button">打开表格</button>
+          <span id="lark-inbox-summary">尚未读取</span>
+        </div>
+        <div id="lark-inbox-events" class="event-list empty">暂无</div>
+      </div>
       <div class="panel-section tab-panel" data-tab-panel="bridge">
         <h2>Bridge 任务</h2>
         <div class="bridge-panel-tools">
@@ -235,6 +318,18 @@
         <dl id="config-events" class="config-list"></dl>
       </div>
     </section>
+    <div id="appearance-confirm" class="appearance-confirm hidden" aria-hidden="true">
+      <button class="appearance-confirm-backdrop" type="button" data-appearance-confirm-cancel aria-label="取消领养"></button>
+      <section id="appearance-confirm-card" class="appearance-confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="appearance-confirm-title" aria-describedby="appearance-confirm-copy" tabindex="-1">
+        <span class="appearance-confirm-icon" aria-hidden="true">🥚</span>
+        <h2 id="appearance-confirm-title">领养新的伙伴？</h2>
+        <p id="appearance-confirm-copy"></p>
+        <div class="appearance-confirm-actions">
+          <button id="appearance-confirm-cancel" type="button" data-appearance-confirm-cancel>先不换</button>
+          <button id="appearance-confirm-accept" type="button">确认领养</button>
+        </div>
+      </section>
+    </div>
     <!-- surface any load/runtime error as a visible bubble instead of a blank window -->
     <script>
       window.addEventListener('error', function (e) {

@@ -18,3 +18,13 @@ src/renderer/pets/*
 # Bundled CC0 pet (optional, opt-in via render.local.js) — safe to ship.
 !src/renderer/pets/slime/
 !src/renderer/pets/slime/**
+# Built-in Aetherling evolution set — generated for Kodama and safe to ship.
+!src/renderer/pets/aetherling/
+!src/renderer/pets/aetherling/**
+# Built-in generated companion families — project-owned and safe to ship.
+!src/renderer/pets/cloudfox/
+!src/renderer/pets/cloudfox/**
+!src/renderer/pets/moonbunny/
+!src/renderer/pets/moonbunny/**
+!src/renderer/pets/mossdragon/
+!src/renderer/pets/mossdragon/**

@@ -1,7 +1,11 @@
 # GIF / sprite 桌宠素材目录
 
-放 GIF / APNG 桌宠素材。默认桌宠仍是 Live2D;这里的素材是**可选**后端,通过
-`config/render.local.js` 启用(见 `config/render.local.example.js`)。
+只想换一张自己的桌宠图片时，不需要把文件放进源码目录：在桌宠的「衣橱 → 自定义形象」中直接上传即可。这里的目录配置用于需要按状态提供多张素材的高级玩法。
+
+这里存放内置成长伙伴与高级 GIF / APNG 素材包。默认提供四个可选家族：
+`aetherling/`、`cloudfox/`、`moonbunny/`、`mossdragon/`，每个家族都包含
+`egg.png → young.png → winged.png` 三阶段。衣橱里可直接选择；私人多状态素材包仍可通过
+`config/render.local.js` 启用（见 `config/render.local.example.js`）。
 
 ## 内置:slime（CC0,已随仓库分发）
 

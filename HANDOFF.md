@@ -43,18 +43,22 @@
 - **P2**：动作表配置驱动 + 来源标签(💬飞书/💻本地) + 气泡优先级；**可插拔渲染后端**（公开 Live2D / 私人 GIF）；`pnpm run setup` 离线下载渲染栈+模型；模型动作组自适应
 - **P3**：本地 hook 接收口（Content-Type 校验 + 64KB 上限 + 可选 `KODAMA_HOOK_TOKEN`），并识别测试/构建/Git 细粒度事件
 - **P4**：养成核心（喂食/经验/升级/持久化）、本地 token 统计/喂食、可配置番茄钟+久坐、**跨源 token 归账**、配饰/换装（slot 图层 + 等级解锁 + 托盘佩戴 + 本地 pack 覆盖）
-- **收尾**：系统通知（弹窗+声音）、本地 Codex notify（链式转发）、全屏置顶重申、托盘调大小、右键事件/配置面板、Bridge 完整任务详情页（任务列表/prompt/最终回复/错误/cwd/token/公开进度时间线/飞书跳转/Goofy 分享）、面板 tabs + 指标跳转、面板标题栏拖动、拖动边界保护、贴边半露/严格屏内模式、双击抚摸、可选自动游走、常驻事件气泡卡片、气泡点击跳转/多会话列表、图案大小/透明度/命中范围/触发方式/贴近宠物或角落避让设置、设置复制/粘贴导入导出、勿扰/声音/系统通知开关、隐藏恢复兜底（`⌘⌥K`、`⌘⌥P`、`pnpm run show/panel/bridge-tasks`、`/pet/show`）、开机自启、electron-builder 打包脚本、bridge `PET_AUTOLAUNCH`
+- **收尾**：系统通知（弹窗+声音）、本地 Codex notify（链式转发）、全屏置顶重申、托盘调大小、右键事件/配置面板、飞书群消息 inbox（`lark-cli --as user` 活跃群轮询 + Electron Feishu Web push 实时通道 +「群聊」表格页签）、Bridge 完整任务详情页（任务列表/prompt/最终回复/错误/cwd/token/公开进度时间线/飞书跳转/Goofy 分享）、面板 tabs + 指标跳转、面板标题栏拖动、拖动边界保护、贴边半露/严格屏内模式、双击抚摸、可选自动游走、常驻事件气泡卡片、气泡点击跳转/多会话列表、图案大小/透明度/命中范围/触发方式/贴近宠物或角落避让设置、设置复制/粘贴导入导出、勿扰/声音/系统通知开关、隐藏恢复兜底（`⌘⌥K`、`⌘⌥P`、`pnpm run show/panel/bridge-tasks`、`/pet/show`）、开机自启、electron-builder 打包脚本、bridge `PET_AUTOLAUNCH`
 
 ## 5. 关键文件地图
 
 **kodama/src/main/**
-- `index.js` — 窗口(透明/置顶/穿透/`reassertTopmost`/调大小/拖动边界保护/贴边半露/隐藏恢复)、Bridge 任务详情独立窗口、托盘(番茄钟控制+token+「大小」+开机自启)、本地 hook/control 接收口(7766, `/healthz`、`/pet/show|hide|toggle|panel|bridge-tasks`、`/pet/token-stats`、`/pet/lark-token-test`；`mapHookToEvent` 同时认 CC 的 `hook_event_name` 和 Codex 的 `type`)、番茄钟接线、token IPC + lark 账本、growth 状态 IPC、窗口尺寸和位置持久化
-- `preload.js` — 暴露 `setIgnoreMouse/move/onAgentEvent/getState/saveState/tokenStats/addLarkTokens/onNotify/getPomodoroSettings/updatePomodoroSettings`，以及 Bridge 任务读取/分享/详情窗口 IPC、配置导入导出用剪贴板 IPC
+- `index.js` — 窗口(透明/置顶/穿透/`reassertTopmost`/调大小/拖动边界保护/贴边半露/隐藏恢复)、Bridge 任务详情独立窗口、托盘(番茄钟控制+token+「大小」+开机自启)、本地 hook/control 接收口(7766, `/healthz`、`/pet/show|hide|toggle|panel|bridge-tasks`、`/pet/open-target`、`/pet/token-stats`、`/pet/lark-token-test`、`/pet/lark-inbox`、`/pet/lark-inbox-refresh`、`/pet/lark-archive`、`/pet/lark-base-sink`、`/pet/lark-base-open`、`/pet/lark-web-push*`；`mapHookToEvent` 同时认 CC 的 `hook_event_name` 和 Codex 的 `type`)、飞书群消息 inbox/实时 web-push 启动与新增摘要事件、本地归档、多维表格 sink、番茄钟接线、token IPC + lark 账本、growth 状态 IPC、窗口尺寸和位置持久化
+- `lark-inbox.js` — 通过 `lark-cli im chats list --as user` + `+chat-messages-list --as user` 读取最近活跃群消息，同时接收 web-push 消息，维护本地已见消息基线，输出桌宠可渲染 snapshot
+- `lark-message-archive.js` — 将 snapshot 中的新消息完整落本地 JSONL，默认 7 天 / 5000 条，用作 snapshot 之外的可查持久层
+- `lark-base-sink.js` — 可选多维表格同步；读取 `kodama-lark-base-config.json` 或 env 里的 base token/table，把归档消息异步写入 Base，并给面板「打开表格」入口提供 URL；默认写入「最近群消息」可读表，技术字段在视图内隐藏，视图包含「最近消息」和「按群查看」
+- `lark-web-push.js` / `lark-web-preload.js` — 用独立 Electron Feishu Web 会话监听 `ClientChannelPush`，把实时消息只送回本机 Kodama；不使用外部 webhook
+- `preload.js` — 暴露 `setIgnoreMouse/move/onAgentEvent/getState/saveState/tokenStats/addLarkTokens/onNotify/getPomodoroSettings/updatePomodoroSettings`，以及 Bridge 任务读取/分享/详情窗口 IPC、飞书群消息 inbox + web-push + 多维表格入口 IPC、配置导入导出用剪贴板 IPC
 - `pomodoro.js` — 番茄钟状态机（纯逻辑 + `tick()` 驱动，可测，支持 `configure()` 热更新）
 - `token-usage.js` — 读 `~/.claude/projects` + `~/.codex/sessions` JSONL，`usageByDay`/`summarizeByDay`/`summarize`（接受 root/now 参数便于测试）
 
 **kodama/src/renderer/**
-- `renderer.js` — 编排：选后端(Live2D/gif)、窗口交互(小命中框/触发方式/Alt 拖拽/面板标题栏拖拽/穿透/贴边半露/双击抚摸/可选游走)、常驻气泡卡片(飞书/本地/待确认不同样式，点忽略消失)、tab 面板(指标跳转)、配置复制/粘贴、番茄钟设置、agent-sync、growth、token 轮询
+- `renderer.js` — 编排：选后端(Live2D/gif)、窗口交互(小命中框/触发方式/Alt 拖拽/面板标题栏拖拽/穿透/贴边半露/双击抚摸/可选游走)、常驻气泡卡片(飞书/本地/待确认不同样式，点忽略消失)、tab 面板(指标跳转 + 群聊表格 inbox + 实时窗口入口)、配置复制/粘贴、番茄钟设置、agent-sync、growth、token 轮询
 - `agent-sync.js` — SSE 客户端 → `onEvent`（透传 tokens/chatId/messageId；bridgeUrl 可经 agent.local.js 覆盖）
 - `reactions.js` — 事件 → 反应（气泡/动作/状态 + `notify:true` 触发原生系统通知），气泡优先级守护；`renderer.js` 同步维护最近事件/待交互/配置面板
 - `growth.js` — `feed(type)` / `feedTokens(total)`（首次记基线，之后按增量）/ 升级 / 配饰解锁与佩戴状态
@@ -73,7 +77,7 @@
 
 **kodama/scripts/**
 - `setup-assets.mjs`（`pnpm run setup [wanko|rice|mark|haru]`）下载渲染栈+模型到 gitignored `vendor/`、`models/`
-- `check.mjs`（`pnpm run check` 全量语法）、`codex-notify.sh`（Codex notify 链式转发）、`kodama-control.mjs`（`pnpm run show/hide/toggle/panel/bridge-tasks/healthz/tokens/token:test`，隐藏后恢复、Bridge 详情和 token 验收兜底）
+- `check.mjs`（`pnpm run check` 全量语法）、`setup-lark-message-base.mjs`（`pnpm run lark:base:setup` 创建/绑定飞书多维表格）、`codex-notify.sh`（Codex notify 链式转发）、`kodama-control.mjs`（`pnpm run show/hide/toggle/panel/bridge-tasks/healthz/tokens/token:test`，隐藏后恢复、Bridge 详情和 token 验收兜底）
 
 **lark-codex-bridge/**（连接胶水）
 - `src/pet-event-bus.mjs` — 无依赖事件总线（环形缓冲+SSE 订阅+replay）
@@ -86,7 +90,7 @@
 - `~/.codex/config.toml`：保留 Computer Use notify 链；`~/.codex/hooks.json` 的 `PermissionRequest` / `UserPromptSubmit` / `Stop` / `SubagentStop` 已加 `curl ... 127.0.0.1:7766`
 - bridge `.env`（用户自己配）：`PET_SYNC_ENABLED=1`、可选 `PET_AUTOLAUNCH=1` + `PET_CWD=/Users/bytedance/code/kodama`
 
-状态文件（Electron userData 目录）：`kodama-state.json`(养成)、`kodama-lark-tokens.json`(飞书token账本)、`kodama-window.json`(窗口尺寸，带 version 迁移)、`kodama-pomodoro.json`(番茄钟/久坐)。右键面板里的 UI 设置存在 Electron localStorage：图案大小、透明度、点击范围、触发方式、气泡/面板位置等。
+状态文件（Electron userData 目录）：`kodama-state.json`(养成)、`kodama-lark-tokens.json`(飞书token账本)、`kodama-lark-inbox-state.json`(群消息已见基线)、`kodama-lark-messages.jsonl`(群消息完整本地归档，默认 7 天)、`kodama-lark-base-config.json`(可选多维表格配置)、`kodama-lark-base-state.json`(已同步 messageId → recordId)、`kodama-window.json`(窗口尺寸，带 version 迁移)、`kodama-pomodoro.json`(番茄钟/久坐)。web-push 的飞书登录态使用独立 Electron partition `persist:kodama-lark-web-push`。右键面板里的 UI 设置存在 Electron localStorage：图案大小、透明度、点击范围、触发方式、气泡/面板位置等。
 
 ## 7. 怎么跑 / 测（重要：改完必须重启）
 
@@ -108,12 +112,13 @@ pnpm run bridge-tasks # 打开 Bridge 完整任务详情页
 1. 本地 CC / Codex 跑完或 SubagentStop → 弹系统通知 + 桌宠「💻 ...完成」
 2. PermissionRequest / AskUserQuestion → 气泡 + 事件面板「待交互」
 3. 飞书 @ 机器人 → 「💬 飞书…」+ 托盘「飞书 token」进账；若要先测 Kodama 侧，用 `pnpm run token:test` 后看 `pnpm run tokens`
-4. 右键桌宠、菜单栏 Kodama 或 `⌘⌥P` →「事件 / 配置面板」能看到最近事件、待交互、会话列表、Bridge/Hook 状态；隐藏后 `⌘⌥K` 或 `pnpm run show` 能恢复
-5. 菜单栏 Kodama / 右键面板 / `pnpm run bridge-tasks` → Bridge 任务详情页能加载任务，点任务能看到 prompt、最终回复、错误、token、cwd、公开进度 timeline；有 chatId 的任务可打开飞书会话；「分享任务页」能复制 Goofy 链接
-6. 全屏 App 之上能否看到桌宠
-7. 面板里调「图案大小 / 透明度 / 点击范围 / 触发方式 / 贴边 / 抚摸 / 游走 / 气泡位置 / 面板位置 / 气泡高度 / 气泡间距」；托盘「大小」调窗口；点桌宠看 `Lv·🍖·⭐·今日 tok`
-8. 面板「复制配置 / 粘贴配置」能导入导出 UI + 番茄钟设置
-9. 番茄钟（托盘 🍅）和右键面板的番茄钟/久坐时长配置
+4. 右键桌宠、菜单栏 Kodama 或 `⌘⌥P` →「事件 / 配置面板」能看到最近事件、待交互、会话列表、群聊 inbox、Bridge/Hook 状态；隐藏后 `⌘⌥K` 或 `pnpm run show` 能恢复
+5. 面板「群聊」→「刷新」或菜单栏「刷新飞书群消息」能拉到最近活跃群消息；点击一条消息打开对应飞书群
+6. 菜单栏 Kodama / 右键面板 / `pnpm run bridge-tasks` → Bridge 任务详情页能加载任务，点任务能看到 prompt、最终回复、错误、token、cwd、公开进度 timeline；有 chatId 的任务可打开飞书会话；「分享任务页」能复制 Goofy 链接
+7. 全屏 App 之上能否看到桌宠
+8. 面板里调「图案大小 / 透明度 / 点击范围 / 触发方式 / 贴边 / 抚摸 / 游走 / 气泡位置 / 面板位置 / 气泡高度 / 气泡间距」；托盘「大小」调窗口；点桌宠看 `Lv·🍖·⭐·今日 tok`
+9. 面板「复制配置 / 粘贴配置」能导入导出 UI + 番茄钟设置
+10. 番茄钟（托盘 🍅）和右键面板的番茄钟/久坐时长配置
 
 ## 8. 待办 TODO（优先级从上到下）
 

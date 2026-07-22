@@ -31,9 +31,10 @@ pnpm start
 - 右键打开面板后，拖动面板标题栏的 `⠿` 可以移动整只桌宠；也可以按住 `⌥/Alt` 后拖动宠物
 - 支持贴边半露：拖到屏幕边缘时只要求保留一部分可见，不会完全丢出屏幕；也可在设置里改回严格屏内
 - **右键桌宠 / 气泡** 打开事件与设置面板；点击气泡会打开对应会话，多个会话时打开列表
+- 在「衣橱 → 自定义形象」里可直接上传 PNG、GIF、WebP 或 JPG；素材会复制到 Kodama 用户数据目录，支持预览、切换、删除和一键恢复内置精灵
 - 支持双击抚摸和可选自动游走；游走默认关闭，避免打扰
 - 飞书机器人事件和本地 Agent 事件会以不同颜色的常驻气泡卡片提示，点「忽略」才消失；非事件类提示仍会自动淡出
-- 支持**勿扰模式**：事件仍记录、仍喂养，但不弹气泡、不响、不发系统通知；可从面板或菜单栏切换
+- 支持**勿扰模式**：事件仍记录、token 仍会积累成长，但不弹气泡、不响、不发系统通知；可从面板或菜单栏切换
 - 支持声音/系统通知独立开关；重要事件默认有系统通知和短提示音
 - 事件面板用 tab 分区，顶部「待交互 / 已完成 / 事件」数字可直接切到对应列表
 - 事件面板和菜单栏都有 **Bridge 任务详情**入口：读取 bridge `/task-viewer/tasks.json`，显示任务列表、prompt、最终回复、错误、token、cwd、飞书 chat/message 和完整公开进度时间线
@@ -48,6 +49,7 @@ pnpm start
 |------|------|------|
 | **P0** | 透明置顶窗 + Live2D 模型 + 待机动画 + 拖动 + 点击穿透 | ✅ |
 | **P1** | 飞书机器人联动：订阅 `lark-codex-bridge` 的 `/pet/events`(SSE)，把收消息/起任务/进度/回复/完成/失败同步成动作+气泡 | ✅ |
+| **P1.5** | 飞书群消息 inbox：`lark-cli --as user` 稳定轮询 + Feishu Web push 实时通道，面板「群聊」表格展示最近消息 | ✅ |
 | **P2** | ✅ JSON 动作表 + 来源标签 + 气泡优先级 + 渲染栈/模型本地化(`pnpm run setup`)；⏳ 行为状态机/命中分区 | 🚧 |
 | **P3** | ✅ 本地 Claude Code/Codex hook 接收(`source:local`) + 测试/构建/Git 细分事件；⏳ 插件化 | 🚧 |
 | **P4** | ✅ 养成核心 + 本地 token 统计/喂食 + 可配置番茄钟/久坐提醒 + 跨源 token 归账 + 配饰/等级解锁 + 打包脚本；⏳ 正式签名/跨平台实机验证 | 🚧 |
@@ -80,6 +82,32 @@ PET_SYNC_MODE=safe         # safe=脱敏+截断摘要(默认推荐)；full=本�
 **事件类型**：`lark_message_received`（看手机）/ `task_started`（开工）/ `task_progress`（进度）/ `lark_reply_sent`（回复摘要）/ `task_waiting`（待交互）/ `agent_done`（子 Agent 完成）/ `task_done`（撒花）/ `task_failed`（报错）。
 
 菜单栏 Kodama 的「事件 / 配置面板」会保留最近事件、待交互项、Agent 完成项、可跳转会话和当前 bridge/hook 状态；气泡错过时可以从这里回看。气泡本身可点击：只有一个可跳转会话时直接打开；多个会话时打开列表。当前优先跳到飞书 chat，若事件 payload 将来带明确 URL，会优先打开该 URL。
+
+## 飞书群消息 inbox
+
+Bridge 事件只覆盖「机器人收到/处理的消息」。如果要看你本人最近各个群的普通消息，Kodama 有两条本机只读通道：
+
+1. 稳定兜底：通过 `lark-cli im chats list --as user` 和 `lark-cli im +chat-messages-list --as user` 轮询。
+2. 实时通道：用 Electron 打开一个独立的 Feishu Web 会话，注入 `ClientChannelPush` 监听，把 Web push 消息只送回本机 Kodama，不转发外部 webhook。
+
+- 默认轮询 8 个最近活跃群、每群 4 条消息、每 3 分钟刷新一次。
+- 首次启动只建立已读基线；后续轮询或实时 push 发现新增消息时，会在最近事件里记一条 `lark_message_received` 摘要。
+- 右键桌宠或按 `⌘⌥P` 打开「事件 / 配置」→「群聊」页签，可以在表格里按时间看到最近群消息；点击消息会打开对应飞书群；绑定多维表格后，「打开表格」会直接打开归档 Base。
+- 菜单栏「刷新飞书群消息」可手动刷新；「打开飞书实时窗口」用于登录/查看实时通道；「重载飞书实时窗口」会重新注入 Feishu Web。
+- 存储分三层：运行态 snapshot 只负责桌宠当前视图；`kodama-lark-messages.jsonl` 默认保留 7 天完整消息用于本机查询；可选多维表格同步用于飞书侧筛选/检索。
+- 本地接口：`http://127.0.0.1:7766/pet/lark-inbox`、`/pet/lark-inbox-refresh`、`/pet/lark-archive?limit=100`、`/pet/lark-base-sink`、`/pet/lark-base-open`、`/pet/lark-web-push`、`/pet/lark-web-push-open`、`/pet/lark-web-push-reload`。
+- 可用环境变量调整轮询：`KODAMA_LARK_INBOX_ENABLED=0`、`KODAMA_LARK_INBOX_CHAT_LIMIT=8`、`KODAMA_LARK_INBOX_MESSAGE_LIMIT=4`、`KODAMA_LARK_INBOX_POLL_MS=180000`。
+- 可用环境变量调整本机归档：`KODAMA_LARK_ARCHIVE_ENABLED=0`、`KODAMA_LARK_ARCHIVE_DAYS=7`、`KODAMA_LARK_ARCHIVE_MAX=5000`。
+- 可用环境变量调整多维表格回填：`KODAMA_LARK_BASE_BACKFILL_LIMIT=500`。
+- 可用环境变量调整实时通道：`KODAMA_LARK_WEB_PUSH_ENABLED=0`、`KODAMA_LARK_WEB_PUSH_SHOW=1`、`KODAMA_LARK_WEB_PUSH_URL=https://relient.feishu.cn/next/messenger`。
+
+创建/绑定多维表格：
+
+```bash
+pnpm run lark:base:setup
+```
+
+这个脚本会用 `lark-cli base` 创建「Kodama 飞书群消息归档」Base 和「最近群消息」表，默认视图为「最近消息」并按时间倒序，另带「按群查看」分组视图。字段顺序优先给人查看：时间、群名、发送人、内容、来源、类型；消息ID、chat_id、sender_id、thread_id、归档时间会保留在表内用于检索和排查，但默认在两个视图里隐藏。脚本会把配置写入 Electron userData 的 `kodama-lark-base-config.json`。如果本机已经绑定过配置，脚本会直接退出；确实要新建并覆盖绑定时再加 `-- --force`。重启 Kodama 后，新的归档消息会异步写入该多维表格。先看请求形状可跑 `pnpm run lark:base:setup -- --dry-run`。
 
 如果要看飞书机器人一次任务的完整过程，打开「Bridge 任务详情」：
 
@@ -166,6 +194,8 @@ pnpm run token:test # 注入一笔 Feishu token 测 Kodama 侧进账链路
 
 ## 渲染后端：公开 Live2D / 私人 GIF
 
+日常换形象不需要改代码：直接打开「衣橱 → 自定义形象 → 上传」。单张静态图会沿用 Kodama 的状态动效，GIF 会同时保留自身动画；单文件上限 25MB。下面的本地素材包方式主要用于需要为 idle / working / done 等状态分别提供图片的高级配置。
+
 桌宠的窗口、穿透、拖拽、agent 同步、动作表全部与"用什么渲染"无关，所以支持两套后端：
 
 | 后端 | 用途 | 形象 | 提交/分发 |
@@ -185,12 +215,13 @@ pnpm start
 
 ## 养成系统（P4）
 
-桌宠会"长大"：每个 agent 事件都会喂食它。
+桌宠会从一颗蛋慢慢长大；唯一成长燃料是你新使用的 token，Agent 事件负责触发表情和陪伴记录。
 
-- **喂食/经验**：事件按 `src/renderer/growth.js` 的 `GAINS` 表加 🍖饱食 与 ⭐经验（`task_done` 给得最多）。
+- **喂食/经验**：每新增 100000 token 会转成 1 点食物与 2 点经验；首次启动只建立当前总量基线，不会把历史 token 一次灌入等级。
 - **升级**：经验过阈值自动升级，触发升级气泡 + 动作表演。
 - **状态持久化**：`{ level, exp, food, totalFed, unlockedAccessories, equippedAccessories }` 存在主进程的 `userData/kodama-state.json`，经 preload 的 `getState/saveState`。
 - **查看**：点一下桌宠显示 `Lv.N · 🍖food · ⭐exp/next`。
+- **重新开始**：在「衣橱」点击「重新孵化一颗蛋」，确认后会清空成长与装扮进度并恢复内置蛋形象；现有用户不会被静默重置。
 
 ## 配饰 / 换装（P4）
 
@@ -207,7 +238,7 @@ pnpm start
 - **状态机**在主进程 `src/main/pomodoro.js`：`idle → focus → short/long_break`，暂停是标志位不是独立状态，逻辑用 `tick()` 驱动（好测）。
 - **时长配置**在右键面板：专注、短休、长休、长休间隔、久坐提醒都可改，写入 `userData/kodama-pomodoro.json`，无需重启。默认仍是 25/5/15 分钟、每 4 轮长休、45 分钟久坐提醒。
 - **控制**走托盘菜单：开始 / 暂停·继续 / 放弃；菜单栏标题显示倒计时 `🍅 24:59`。
-- **联动**：进入各阶段经 `pet-notify` 让桌宠换状态+冒泡；**完成一个番茄 → 发 `pomodoro_completed` 事件**走和 agent 事件同一条 `handleAgentEvent → feed` 喂食链路（+20🍖/+50⭐）。**放弃不给奖励**（损失厌恶，不扣分）。
+- **联动**：进入各阶段经 `pet-notify` 让桌宠换状态、冒泡并记录陪伴事件；成长仍只来自 token，番茄完成/放弃都不会额外改写等级。
 - **久坐提醒**：独立计时，非休息时段轻提醒"起来走走~"；设置为 0 即关闭。
 
 ## Token 用量与喂食（P4）
@@ -216,7 +247,7 @@ pnpm start
 
 - **取数**：主进程 `src/main/token-usage.js` 读本地 JSONL —— Claude Code(`~/.claude/projects`，读 `message.usage`) + Codex(`~/.codex/sessions`，尽力解析)，按天聚合。
 - **统计**：托盘菜单显示「今日 token / 近 7 天」，点桌宠显示「今日 X tok」。IPC `pet:token-stats` 返回 `{today,last7,total,byDay}`。
-- **喂食**：`growth.js` 的 `feedTokens(total)` 首次只记基线（不把历史用量一次性灌成升级），之后按 token 增量喂食（默认每 2000 token = 1 🍖）。
+- **喂食**：`growth.js` 的 `feedTokens(total)` 首次只记基线（不把历史用量一次性灌成升级），之后只按新的 token 增量喂食（每 100000 token = 1 🍖 + 2 经验）；普通 Agent 事件只触发表情，不会绕过 token 成长。
 - ⚠️ JSONL 的 token 数是**近似值**（缓存 token、字段缺失会导致与官方计量有偏差），够用来"喂宠物 + 看大致用量"，不是账单级精度。
 - **跨源归账（Kodama 侧已就绪）**：飞书事件带 `tokens` 即并入独立的 lark 账本（`userData/kodama-lark-tokens.json`），与本地合并出「今日/近7天/总量 + 本地/飞书明细」（托盘 + 点击桌宠显示）。因 bridge 用 `--ephemeral`（飞书 Codex 不落本地 `~/.codex`），相加不会重复计数。**bridge 侧已接通**：app-server 从 completed turn 取 `turn.usage` → `task_done` 事件带 `tokens` → 桌宠并入飞书账本。先用 `pnpm run token:test` 验 Kodama 侧链路；真实飞书任务后再用 `pnpm run tokens` 看飞书栏是否自然增长。若一直 0，多半是 `turn.usage` 字段名不同，bridge 的 `raw.usage` 留了原始结构可核对。
 

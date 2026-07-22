@@ -10,6 +10,56 @@ function defaultIndexPath(homeDir = os.homedir()) {
   return path.join(homeDir, '.codex', 'session_index.jsonl')
 }
 
+function readFirstLine(filePath, deps = {}) {
+  const openSync = deps.openSync || fs.openSync
+  const readSync = deps.readSync || fs.readSync
+  const closeSync = deps.closeSync || fs.closeSync
+  const maxBytes = Math.max(1, Number(deps.maxBytes) || 1024 * 1024)
+  let fd
+  try {
+    fd = openSync(filePath, 'r')
+    const chunks = []
+    let total = 0
+    while (total < maxBytes) {
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - total))
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null)
+      if (!bytesRead) break
+      const chunk = buffer.subarray(0, bytesRead)
+      const newline = chunk.indexOf(10)
+      if (newline >= 0) {
+        chunks.push(chunk.subarray(0, newline))
+        break
+      }
+      chunks.push(chunk)
+      total += bytesRead
+    }
+    return Buffer.concat(chunks).toString('utf8').replace(/\r$/, '')
+  } catch {
+    return ''
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd) } catch { /* ignore close errors */ }
+    }
+  }
+}
+
+function isCodexDesktopTranscript(transcriptPath, deps = {}) {
+  const filePath = String(transcriptPath || '').trim()
+  if (!filePath) return false
+  const getFirstLine = deps.readFirstLine || readFirstLine
+  try {
+    const item = JSON.parse(getFirstLine(filePath, deps))
+    if (item?.type !== 'session_meta') return false
+    const payload = item?.payload || {}
+    const expectedSessionId = cleanTitle(deps.sessionId, 120)
+    const actualSessionId = cleanTitle(payload.id || payload.session_id || payload.sessionId, 120)
+    if (expectedSessionId && expectedSessionId !== actualSessionId) return false
+    return /^codex desktop$/i.test(String(payload.originator || '').trim())
+  } catch {
+    return false
+  }
+}
+
 function readCodexSessionTitles(indexPath, deps = {}) {
   const readFileSync = deps.readFileSync || fs.readFileSync
   const titles = new Map()
@@ -65,5 +115,7 @@ module.exports = {
   cleanTitle,
   createCodexSessionTitleResolver,
   defaultIndexPath,
+  isCodexDesktopTranscript,
+  readFirstLine,
   readCodexSessionTitles,
 }

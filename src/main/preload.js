@@ -19,6 +19,15 @@ contextBridge.exposeInMainWorld('pet', {
   bridgeTasks: (request) => ipcRenderer.invoke('pet:bridge-tasks', request),
   shareBridgeTasks: (request) => ipcRenderer.invoke('pet:share-bridge-tasks', request),
   openBridgeTasksWindow: () => ipcRenderer.invoke('pet:open-bridge-tasks-window'),
+  larkInbox: () => ipcRenderer.invoke('pet:lark-inbox'),
+  refreshLarkInbox: () => ipcRenderer.invoke('pet:lark-inbox-refresh'),
+  onLarkInboxUpdate: (cb) => ipcRenderer.on('pet:lark-inbox-updated', (_e, snapshot) => cb(snapshot)),
+  larkBaseSink: () => ipcRenderer.invoke('pet:lark-base-sink'),
+  openLarkBase: () => ipcRenderer.invoke('pet:lark-base-open'),
+  larkWebPushStatus: () => ipcRenderer.invoke('pet:lark-web-push-status'),
+  openLarkWebPush: () => ipcRenderer.invoke('pet:lark-web-push-open'),
+  reloadLarkWebPush: () => ipcRenderer.invoke('pet:lark-web-push-reload'),
+  onLarkWebPushUpdate: (cb) => ipcRenderer.on('pet:lark-web-push-updated', (_e, status) => cb(status)),
   copyText: (text) => ipcRenderer.invoke('pet:copy-text', text),
   readText: () => ipcRenderer.invoke('pet:read-text'),
   // local Claude Code / Codex hook events forwarded from the main process
@@ -26,6 +35,10 @@ contextBridge.exposeInMainWorld('pet', {
   // growth state (P4)
   getState: () => ipcRenderer.invoke('pet:get-state'),
   saveState: (state) => ipcRenderer.send('pet:save-state', state),
+  customStyles: () => ipcRenderer.invoke('pet:custom-styles'),
+  importCustomStyle: () => ipcRenderer.invoke('pet:custom-style-import'),
+  activateCustomStyle: (id) => ipcRenderer.invoke('pet:custom-style-activate', id),
+  deleteCustomStyle: (id) => ipcRenderer.invoke('pet:custom-style-delete', id),
   // token usage stats (P4) — local + Feishu(lark) merged
   tokenStats: () => ipcRenderer.invoke('pet:token-stats'),
   addLarkTokens: (tokens) => ipcRenderer.send('pet:add-lark-tokens', tokens),

@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import {
   createCodexSessionTitleResolver,
   defaultIndexPath,
+  isCodexDesktopTranscript,
   readCodexSessionTitles,
 } from '../src/main/codex-session-index.js'
 
@@ -37,4 +38,30 @@ test('resolver reloads Codex session titles when the index changes', () => {
 
 test('default index path points at the Codex session index', () => {
   assert.equal(defaultIndexPath('/Users/bytedance'), '/Users/bytedance/.codex/session_index.jsonl')
+})
+
+test('recognizes durable Codex Desktop identity from transcript session metadata', () => {
+  assert.equal(isCodexDesktopTranscript('/tmp/desktop-session.jsonl', {
+    readFirstLine: () => JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'desktop-session', originator: 'Codex Desktop' },
+    }),
+    sessionId: 'desktop-session',
+  }), true)
+
+  assert.equal(isCodexDesktopTranscript('/tmp/cli-session.jsonl', {
+    readFirstLine: () => JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'cli-session', originator: 'Codex CLI' },
+    }),
+    sessionId: 'cli-session',
+  }), false)
+  assert.equal(isCodexDesktopTranscript('/tmp/wrong-session.jsonl', {
+    readFirstLine: () => JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'another-session', originator: 'Codex Desktop' },
+    }),
+    sessionId: 'expected-session',
+  }), false)
+  assert.equal(isCodexDesktopTranscript('', { readFirstLine: () => '' }), false)
 })

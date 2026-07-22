@@ -87,6 +87,38 @@ test('codex internal memory hook sessions are ignored', () => {
   }), null)
 })
 
+test('Feishu bot delegate prompts preserve their original chat and message route', () => {
+  const prompt = [
+    '你是通过飞书机器人被调用的 Codex，请用中文回答。',
+    '这里有一段很长的桥接说明，用来确保路由字段出现在八十个字符之后。'.repeat(3),
+    '当前群 chat_id：oc_5224ef9ac280e85bdb2f19e4888b304a',
+    '原始消息 message_id：om_x100b6a7d7779b090b346f190f4daabb',
+  ].join('\n')
+  const event = mapHookToEvent({
+    hook_event_name: 'UserPromptSubmit',
+    session_id: '019f5a68-77b2-7042-97b1-d517d54fbe2a',
+    cwd: '/var/folders/demo/T/lark-codex-non-owner-zPEuvU',
+    prompt,
+  })
+
+  assert.equal(event.source, 'lark')
+  assert.equal(event.larkBridge, true)
+  assert.equal(event.chatId, 'oc_5224ef9ac280e85bdb2f19e4888b304a')
+  assert.equal(event.messageId, 'om_x100b6a7d7779b090b346f190f4daabb')
+  assert.equal(event.prompt.length, 80)
+})
+
+test('Feishu bot delegate lifecycle is recognized from its private scratch directory', () => {
+  const event = mapHookToEvent({
+    hook_event_name: 'Stop',
+    session_id: '019f5a68-77b2-7042-97b1-d517d54fbe2a',
+    cwd: '/var/folders/demo/T/lark-codex-non-owner-zPEuvU',
+  })
+
+  assert.equal(event.source, 'lark')
+  assert.equal(event.larkBridge, true)
+})
+
 test('ordinary projects named memories are still surfaced', () => {
   const event = mapHookToEvent({
     type: 'agent-turn-complete',
@@ -115,6 +147,17 @@ test('ordinary projects named memories are still surfaced', () => {
     sessionId: 'normal-session',
     cwd: '/Users/bytedance/code/memories',
   })
+})
+
+test('Orca Claude usage lifecycle hooks are ignored as internal noise', () => {
+  const base = {
+    session_id: '9c5b4e31-1aa7-4fc5-8ff3-0ae974d3d59c',
+    transcript_path: '/Users/bytedance/.claude/projects/-Users-bytedance-Library-Application-Support-orca-rate-limit-pty-cwd/9c5b4e31-1aa7-4fc5-8ff3-0ae974d3d59c.jsonl',
+    cwd: '/Users/bytedance/Library/Application Support/orca/rate-limit-pty-cwd',
+  }
+
+  assert.equal(mapHookToEvent({ ...base, hook_event_name: 'SessionStart' }), null)
+  assert.equal(mapHookToEvent({ ...base, hook_event_name: 'SessionEnd', reason: 'other' }), null)
 })
 
 test('claude subagent lifecycle maps to local progress bubbles', () => {

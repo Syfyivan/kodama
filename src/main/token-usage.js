@@ -12,6 +12,10 @@ const path = require('path')
 const os = require('os')
 const { costFor } = require('./pricing')
 
+const MIB = 1024 * 1024
+const DEFAULT_MAX_FILE_BYTES = 64 * MIB
+const DEFAULT_SCAN_BUDGET_BYTES = 128 * MIB
+
 function listJsonl(root) {
   const out = []
   let entries
@@ -23,9 +27,32 @@ function listJsonl(root) {
   for (const e of entries) {
     const p = path.join(root, e.name)
     if (e.isDirectory()) out.push(...listJsonl(p))
-    else if (e.isFile() && p.endsWith('.jsonl')) out.push(p)
+    else if (e.isFile() && p.endsWith('.jsonl')) {
+      try {
+        const stat = fs.statSync(p)
+        out.push({ path: p, size: stat.size, mtimeMs: stat.mtimeMs })
+      } catch {
+        /* file disappeared while walking */
+      }
+    }
   }
   return out
+}
+
+function positiveByteLimit(value, fallback) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function selectJsonlWithinBudget(files, maxFileBytes, scanBudgetBytes) {
+  const selected = []
+  let selectedBytes = 0
+  for (const file of [...files].sort((a, b) => b.mtimeMs - a.mtimeMs)) {
+    if (file.size > maxFileBytes || selectedBytes + file.size > scanBudgetBytes) continue
+    selected.push(file)
+    selectedBytes += file.size
+  }
+  return selected
 }
 
 function eachLine(file, fn) {
@@ -130,7 +157,8 @@ function addCodex(byDay, file, costByDay) {
     const day = String(obj?.timestamp || obj?.ts || '').slice(0, 10)
     if (!day) return
     // Prefer an explicit per-turn delta when present.
-    const delta = obj?.info?.last_token_usage
+    const info = obj?.payload?.info || obj?.info
+    const delta = info?.last_token_usage
     let t = 0
     let bd = null
     if (delta) {
@@ -138,7 +166,7 @@ function addCodex(byDay, file, costByDay) {
       bd = codexBreakdown(delta)
     } else {
       // Otherwise diff the running cumulative total against the previous row.
-      const cum = obj?.info?.total_token_usage || obj?.total_token_usage || obj?.token_usage || obj?.usage
+      const cum = info?.total_token_usage || obj?.total_token_usage || obj?.token_usage || obj?.usage
       if (cum) {
         const total = tokenCount(cum)
         t = Math.max(0, total - prevTotal)
@@ -163,15 +191,29 @@ function addCodex(byDay, file, costByDay) {
 }
 
 // Walk both ledgers once, returning {day -> tokens} and {day -> USD cost}.
-function usageAndCostByDay({ claudeRoot, codexRoot } = {}) {
+function usageAndCostByDay({ claudeRoot, codexRoot, maxFileBytes, scanBudgetBytes } = {}) {
   const cRoot = claudeRoot || path.join(os.homedir(), '.claude', 'projects')
   const xRoot = codexRoot || path.join(os.homedir(), '.codex', 'sessions')
+  const perFileLimit = positiveByteLimit(
+    maxFileBytes ?? process.env.KODAMA_TOKEN_LOG_MAX_BYTES,
+    DEFAULT_MAX_FILE_BYTES,
+  )
+  const totalBudget = positiveByteLimit(
+    scanBudgetBytes ?? process.env.KODAMA_TOKEN_SCAN_BUDGET_BYTES,
+    DEFAULT_SCAN_BUDGET_BYTES,
+  )
   const byDay = {}
   const costByDay = {}
   // Shared across all Claude files so a replayed message dedupes globally.
   const seen = new Set()
-  for (const f of listJsonl(cRoot)) addClaude(byDay, f, seen, costByDay)
-  for (const f of listJsonl(xRoot)) addCodex(byDay, f, costByDay)
+  const candidates = [
+    ...listJsonl(cRoot).map((file) => ({ ...file, source: 'claude' })),
+    ...listJsonl(xRoot).map((file) => ({ ...file, source: 'codex' })),
+  ]
+  for (const file of selectJsonlWithinBudget(candidates, perFileLimit, totalBudget)) {
+    if (file.source === 'claude') addClaude(byDay, file.path, seen, costByDay)
+    else addCodex(byDay, file.path, costByDay)
+  }
   return { byDay, costByDay }
 }
 
