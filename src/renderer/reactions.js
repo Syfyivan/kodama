@@ -34,8 +34,7 @@ const EVENT_FALLBACK_TEXT = {
 
 function eventTextOrFallback(event, type) {
   const text = typeof event?.text === 'string' ? event.text.trim() : ''
-  if (text) return event.text
-  return EVENT_FALLBACK_TEXT[type] || ''
+  return text || EVENT_FALLBACK_TEXT[type] || ''
 }
 
 // Native OS notification (popup + sound) for important events — the in-window
