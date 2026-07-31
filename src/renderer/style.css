@@ -1917,6 +1917,263 @@ body.move-mode #pet-gif {
   transform: none;
 }
 
+/* Task-first agent workspace: one durable task can aggregate many sessions. */
+.agent-task-board-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.agent-task-board-head h2,
+.agent-task-board-head p {
+  margin: 0;
+}
+
+.agent-task-board-head h2 {
+  color: var(--kodama-ink);
+  font-size: 13px;
+}
+
+.agent-task-board-head p,
+.agent-task-board-head > span {
+  color: var(--kodama-ink-muted);
+  font-size: 9px;
+}
+
+.agent-task-board-head > span {
+  flex: none;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: var(--kodama-accent-soft);
+  color: var(--kodama-accent-deep);
+  font-weight: 650;
+}
+
+.agent-task-board-list {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-task-board-list.empty {
+  padding: 18px 12px;
+  border: 1px dashed var(--kodama-border-strong);
+  border-radius: 13px;
+  color: var(--kodama-ink-muted);
+  text-align: center;
+  font-size: 10px;
+}
+
+.agent-task-card {
+  padding: 9px;
+  border: 1px solid var(--kodama-border);
+  border-left: 3px solid var(--kodama-accent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--kodama-surface-raised) 92%, var(--kodama-accent-soft));
+  box-shadow: 0 5px 14px rgba(54, 79, 71, 0.06);
+}
+
+.agent-task-card[data-status="waiting"] {
+  border-left-color: var(--kodama-hatch);
+}
+
+.agent-task-card[data-status="done"] {
+  border-left-color: #63a57c;
+  opacity: 0.78;
+}
+
+.agent-task-card[data-status="failed"] {
+  border-left-color: var(--kodama-danger);
+}
+
+.agent-task-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.agent-task-card-head > div {
+  min-width: 0;
+}
+
+.agent-task-card-head strong,
+.agent-task-card-head span {
+  display: block;
+}
+
+.agent-task-card-head strong {
+  overflow: hidden;
+  color: var(--kodama-ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-task-card-head span {
+  margin-top: 2px;
+  color: var(--kodama-ink-muted);
+  font-size: 8px;
+}
+
+.agent-task-card-head button {
+  flex: none;
+  padding: 3px 6px;
+  border: 1px solid var(--kodama-border);
+  border-radius: 7px;
+  background: var(--kodama-surface-raised);
+  color: var(--kodama-ink-muted);
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.agent-task-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.agent-task-progress > progress,
+.bubble-task-progress-track {
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--kodama-accent) 13%, var(--kodama-surface-soft));
+}
+
+.agent-task-progress > progress::-webkit-progress-bar,
+.bubble-task-progress-track::-webkit-progress-bar {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--kodama-accent) 13%, var(--kodama-surface-soft));
+}
+
+.agent-task-progress > progress::-webkit-progress-value,
+.bubble-task-progress-track::-webkit-progress-value {
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--kodama-accent-deep), var(--kodama-accent));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--kodama-accent) 36%, transparent);
+}
+
+.agent-task-progress > span {
+  min-width: 28px;
+  color: var(--kodama-accent-deep);
+  font-size: 9px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.agent-task-current {
+  margin: 6px 0 0;
+  color: var(--kodama-ink-soft);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.agent-task-sessions {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.agent-session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 5px;
+}
+
+.agent-session-row > button {
+  min-width: 0;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--kodama-surface-soft);
+  color: var(--kodama-ink-soft);
+  cursor: pointer;
+  text-align: left;
+}
+
+.agent-session-row > button:disabled {
+  cursor: default;
+  opacity: 0.74;
+}
+
+.agent-session-row span,
+.agent-session-row small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-session-row span {
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.agent-session-row small {
+  margin-top: 2px;
+  color: var(--kodama-ink-muted);
+  font-size: 7px;
+}
+
+.agent-session-row select {
+  min-width: 0;
+  padding: 0 4px;
+  border: 1px solid var(--kodama-border);
+  border-radius: 8px;
+  background: var(--kodama-surface-raised);
+  color: var(--kodama-ink-soft);
+  font-size: 8px;
+}
+
+.bubble-task-progress {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--kodama-border) 72%, transparent);
+}
+
+.bubble-task-progress-meta,
+.bubble-task-progress-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--kodama-ink-muted);
+  font-size: 9px;
+}
+
+.bubble-task-progress-meta button {
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--kodama-accent) 35%, var(--kodama-border));
+  border-radius: 999px;
+  background: var(--kodama-accent-soft);
+  color: var(--kodama-accent-deep);
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.bubble-task-progress-track {
+  margin: 5px 0 4px;
+}
+
+.bubble-task-progress-value span:first-child {
+  color: var(--kodama-accent-deep);
+  font-weight: 700;
+}
+
+.bubble-task-progress-value span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pet-family-section {
   background:
     radial-gradient(circle at 0 100%, var(--kodama-hatch-soft), transparent 94px),

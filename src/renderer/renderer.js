@@ -66,6 +66,9 @@ const panelStatus = document.getElementById('panel-status')
 const waitingEvents = document.getElementById('waiting-events')
 const doneEvents = document.getElementById('done-events')
 const sessionEvents = document.getElementById('session-events')
+const agentTaskBoardSummary = document.getElementById('agent-task-board-summary')
+const agentTaskBoardRunning = document.getElementById('agent-task-board-running')
+const agentTaskBoardList = document.getElementById('agent-task-board-list')
 const larkInboxEvents = document.getElementById('lark-inbox-events')
 const larkInboxRefresh = document.getElementById('lark-inbox-refresh')
 const larkInboxSummary = document.getElementById('lark-inbox-summary')
@@ -115,6 +118,7 @@ const metricWaiting = document.getElementById('metric-waiting')
 const metricDone = document.getElementById('metric-done')
 const metricInbox = document.getElementById('metric-inbox')
 const metricTotal = document.getElementById('metric-total')
+const metricTasks = document.getElementById('metric-tasks')
 const settingPetScale = document.getElementById('setting-pet-scale')
 const settingPetScaleValue = document.getElementById('setting-pet-scale-value')
 const settingPetOpacity = document.getElementById('setting-pet-opacity')
@@ -170,7 +174,7 @@ let activeAppearanceConfirm = null
 let activeBubbleEvent = null
 // The first surface should explain the pet itself: egg, token feeding and the
 // next evolution. Settings remain one click away but no longer dominate day one.
-let activePanelTab = 'appearance'
+let activePanelTab = 'tasks'
 let eventSeq = 0
 let bubbleSeq = 0
 const eventLog = []
@@ -183,9 +187,10 @@ const MAX_EVENT_LOG = 40
 const MAX_SESSION_TITLE_CACHE = 200
 const MAX_TRANSIENT_BUBBLES = 6
 const MAX_PERSISTENT_BUBBLES = 120
-const PANEL_TABS = new Set(['appearance', 'settings', 'waiting', 'done', 'sessions', 'lark-inbox', 'bridge', 'recent', 'config'])
+const PANEL_TABS = new Set(['tasks', 'appearance', 'settings', 'waiting', 'done', 'sessions', 'lark-inbox', 'bridge', 'recent', 'config'])
 const BUBBLE_ACTION_DEBOUNCE_MS = 600
 const ACTIVE_TARGET_TTL_MS = 10 * 60 * 1000
+const TRACKED_TASK_EVENT_TYPES = new Set(['session_title', 'task_started', 'task_progress', 'task_waiting', 'task_done', 'task_failed', 'agent_done'])
 const FLOATING_PADDING = 8
 const BUBBLE_WIDTH = 340
 const PANEL_WIDTH = 340
@@ -195,6 +200,13 @@ let bridgeTasksState = {
   loaded: false,
   error: '',
   tasks: [],
+  updatedAt: '',
+}
+let agentTaskBoardState = {
+  ok: true,
+  tasks: [],
+  todayTasks: [],
+  counts: { total: 0, today: 0, running: 0, waiting: 0, done: 0, failed: 0 },
   updatedAt: '',
 }
 let larkInboxState = {
@@ -276,6 +288,7 @@ let bubbleActionCooldownUntil = 0
 let bubbleActionCooldownTimer = 0
 let activeViewedTarget = { key: '', at: 0 }
 let updateStatus = null
+let agentEventQueue = Promise.resolve()
 
 function clampNumber(value, min, max, fallback) {
   const n = Number(value)
@@ -521,23 +534,41 @@ async function init() {
     // growth size (growthScale) instead of rendering ~30% too small until the
     // first feed/setting change. Same idempotent layout used on resize/feed.
     backend?.applySettings?.()
-    const handleAgentEvent = (event) => {
-      recordAgentEvent(event)
-      if (event?.type === 'session_title') return
-      // 子 Agent / team-worker 事件只进详情统计和 session 列表,不冒泡/不 TTS。
-      const isSubagent = event?.subagent === true
-        || Boolean(event?.agentTranscriptPath || event?.agent_transcript_path || event?.agentId || event?.agent_id)
-      const suppressForegroundBubble = shouldSuppressForegroundBubble(event)
-      if (suppressForegroundBubble) clearSupersededTaskBubbles(event)
-      if (!uiSettings.dndMode && !isSubagent && !suppressForegroundBubble) {
-        reactToEvent(event, hooks, {
-          sound: uiSettings.soundEnabled,
-          notifications: uiSettings.notificationsEnabled,
-        })
-        speakEvent(event) // optional macOS TTS for important events
-      }
-      // Cross-source token ledger: bridge (source 'lark') events may carry tokens.
-      if (event.source === 'lark' && event.tokens) window.pet.addLarkTokens?.(event.tokens)
+    const handleAgentEvent = (incomingEvent) => {
+      agentEventQueue = agentEventQueue.then(async () => {
+        let event = incomingEvent
+        if (
+          event
+          && !event.taskProgress
+          && TRACKED_TASK_EVENT_TYPES.has(event.type)
+          && window.pet.trackAgentTaskEvent
+        ) {
+          try {
+            const tracked = await window.pet.trackAgentTaskEvent(event)
+            if (tracked?.ok && tracked.event) event = tracked.event
+          } catch (error) {
+            console.error('[kodama] agent task progress tracking failed:', error)
+          }
+        }
+        recordAgentEvent(event)
+        if (event?.type === 'session_title') return
+        // 子 Agent / team-worker 事件只进详情统计和 session 列表,不冒泡/不 TTS。
+        const isSubagent = event?.subagent === true
+          || Boolean(event?.agentTranscriptPath || event?.agent_transcript_path || event?.agentId || event?.agent_id)
+        const suppressForegroundBubble = shouldSuppressForegroundBubble(event)
+        if (suppressForegroundBubble) clearSupersededTaskBubbles(event)
+        if (!uiSettings.dndMode && !isSubagent && !suppressForegroundBubble) {
+          reactToEvent(event, hooks, {
+            sound: uiSettings.soundEnabled,
+            notifications: uiSettings.notificationsEnabled,
+          })
+          speakEvent(event) // optional macOS TTS for important events
+        }
+        // Cross-source token ledger: bridge (source 'lark') events may carry tokens.
+        if (event.source === 'lark' && event.tokens) window.pet.addLarkTokens?.(event.tokens)
+      }).catch((error) => {
+        console.error('[kodama] agent event queue failed:', error)
+      })
     }
 
     // source 'lark' arrives via the configured bridge SSE adapter.
@@ -546,6 +577,20 @@ async function init() {
     disposeAgentSync?.() // tear down a prior SSE connection + probe timer if init re-runs
     disposeAgentSync = connectAgentSync(handleAgentEvent, { ...agentCfg, onStatus: hooks.onStatus })
     window.pet.onAgentEvent?.(handleAgentEvent) // source 'local'
+    window.pet.onAgentTaskBoardUpdate?.((state) => {
+      agentTaskBoardState = normalizeAgentTaskBoardState(state)
+      reconcileBubbleTaskProgress()
+      syncEventPanel()
+    })
+    window.pet.agentTaskBoard?.()
+      .then((state) => {
+        agentTaskBoardState = normalizeAgentTaskBoardState(state)
+        reconcileBubbleTaskProgress()
+        syncEventPanel()
+      })
+      .catch((error) => {
+        console.error('[kodama] agent task board load failed:', error)
+      })
     window.pet.onTogglePanel?.(() => togglePanel())
     window.pet.onEnterMoveMode?.(() => enterMoveMode())
     window.pet.onSetDndMode?.((enabled) => setDndMode(enabled === true))
@@ -1349,6 +1394,13 @@ function setupInteraction() {
       shareBubbleSession(share.dataset.shareBubble)
       return
     }
+    const taskBoard = e.target.closest?.('[data-open-task-board]')
+    if (taskBoard) {
+      hideBubbleHover()
+      setActivePanelTab('tasks')
+      togglePanel(true)
+      return
+    }
     const card = e.target.closest?.('[data-bubble-id]')
     const item = bubbleLog.find(record => record.id === card?.dataset.bubbleId)
     if (item) {
@@ -1811,6 +1863,8 @@ function bubbleKind(event) {
 // of every card reading the same "本地 · 完成". Prefer readable app/project
 // context and explicitly skip internal work ids such as Trae's `.trae-cn/work/*`.
 function taskName(event) {
+  const groupedTask = String(event?.taskProgress?.taskTitle || '').trim()
+  if (groupedTask) return groupedTask
   const context = eventBubbleContext(event)
   if (context) return context
   const prompt = eventTaskLabel(event)
@@ -1856,7 +1910,9 @@ function bubbleTitle(event) {
   if (!event) return 'Kodama'
   const actor = eventActorLabel(event)
   const task = taskName(event)
-  const suffix = typeLabel(event.type)
+  const suffix = event?.taskProgress?.status
+    ? agentTaskStatusLabel(event.taskProgress.status)
+    : typeLabel(event.type)
   const base = actor && task && actor !== task
     ? `${actor} / ${task} · ${suffix}`
     : actor
@@ -1896,6 +1952,8 @@ function bubbleMergeKey(event) {
   if (!event?.type) return ''
   const larkReplyKey = eventLarkReplyMergeKey(event)
   if (larkReplyKey) return larkReplyKey
+  const taskId = String(event?.taskProgress?.taskId || '').trim()
+  if (taskId) return `task:${taskId}`
   if (!new Set(['task_started', 'task_progress', 'task_waiting', 'task_done', 'task_failed']).has(event.type)) {
     return ''
   }
@@ -1911,6 +1969,30 @@ function bubbleMergeKey(event) {
   const cwd = String(event.cwd || event.projectDir || event.project_dir || event.workspacePath || event.workspace_path || '').trim()
   if (cwd) return `cwd:${event.source || 'local'}:${cwd}`
   return ''
+}
+
+function bubbleProgressHtml(event) {
+  const progress = event?.taskProgress
+  if (!progress?.taskId) return ''
+  const percent = Math.min(100, Math.max(0, Math.round(Number(progress.percent || 0))))
+  const sessions = Number(progress.sessionCount || 0)
+  const done = Number(progress.doneSessions || 0)
+  const waiting = Number(progress.waitingSessions || 0)
+  const status = waiting
+    ? `${waiting} 个等待你`
+    : sessions > 1
+      ? `${done}/${sessions} Session 完成`
+      : agentTaskStatusLabel(progress.status)
+  return [
+    '<div class="bubble-task-progress">',
+    '<div class="bubble-task-progress-meta">',
+    `<span>${escapeHtml(status)}</span>`,
+    `<button type="button" data-open-task-board="${escapeHtml(progress.taskId)}">查看任务</button>`,
+    '</div>',
+    `<progress class="bubble-task-progress-track" max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress>`,
+    `<div class="bubble-task-progress-value"><span>${percent}%</span><span>${escapeHtml(shortText(progress.currentStep || event.text || '', 52))}</span></div>`,
+    '</div>',
+  ].join('')
 }
 
 function clearSupersededTaskBubbles(event) {
@@ -1990,6 +2072,7 @@ function renderBubbles() {
       '</div>',
       '</div>',
       `<div class="bubble-text">${escapeHtml(item.text)}</div>`,
+      bubbleProgressHtml(item.event),
       targetText,
       '</article>',
     ].join('')
@@ -2483,6 +2566,19 @@ function setupEventPanel() {
       shareSubagentTranscript(shareSub.dataset.shareSubagent)
       return
     }
+    const renameTask = e.target.closest?.('[data-agent-task-rename]')
+    if (renameTask) {
+      e.stopPropagation()
+      renameAgentTask(renameTask.dataset.agentTaskRename)
+      return
+    }
+    const openSession = e.target.closest?.('[data-agent-session-open]')
+    if (openSession) {
+      e.stopPropagation()
+      const session = agentSessionByKey(openSession.dataset.agentSessionOpen)
+      if (session?.target) openTarget(session.target)
+      return
+    }
     const item = e.target.closest?.('[data-event-id]')
     if (item) {
       openEventById(item.dataset.eventId)
@@ -2490,6 +2586,10 @@ function setupEventPanel() {
     }
     const bridgeItem = e.target.closest?.('[data-bridge-task-id]')
     if (bridgeItem) openBridgeTasksWindow()
+  })
+  eventPanel?.addEventListener('change', (e) => {
+    const select = e.target.closest?.('[data-agent-session-group]')
+    if (select) assignAgentSession(select)
   })
   syncEventPanel()
 }
@@ -3038,6 +3138,214 @@ function renderSessionList(el, list) {
   }).join('')
 }
 
+function normalizeAgentTaskBoardState(value) {
+  const tasks = Array.isArray(value?.tasks) ? value.tasks : []
+  const todayTasks = Array.isArray(value?.todayTasks)
+    ? value.todayTasks
+    : tasks.filter(task => task.isToday !== false)
+  return {
+    ok: value?.ok !== false,
+    tasks,
+    todayTasks,
+    counts: {
+      total: Number(value?.counts?.total ?? tasks.length),
+      today: Number(value?.counts?.today ?? todayTasks.length),
+      running: Number(value?.counts?.running ?? todayTasks.filter(task => task.status === 'running').length),
+      waiting: Number(value?.counts?.waiting ?? todayTasks.filter(task => task.status === 'waiting').length),
+      done: Number(value?.counts?.done ?? todayTasks.filter(task => task.status === 'done').length),
+      failed: Number(value?.counts?.failed ?? todayTasks.filter(task => task.status === 'failed').length),
+    },
+    updatedAt: value?.updatedAt || '',
+  }
+}
+
+function reconcileBubbleTaskProgress() {
+  const bySession = new Map()
+  for (const task of agentTaskBoardState.tasks || []) {
+    for (const session of task.sessions || []) {
+      bySession.set(session.key, {
+        taskId: task.id,
+        taskTitle: task.title,
+        status: task.status,
+        percent: task.progress,
+        currentStep: task.currentStep,
+        sessionKey: session.key,
+        sessionTitle: session.title,
+        sessionStatus: session.status,
+        sessionPercent: session.progress,
+        sessionCount: task.sessionCount,
+        doneSessions: task.doneSessions,
+        runningSessions: task.runningSessions,
+        waitingSessions: task.waitingSessions,
+        failedSessions: task.failedSessions,
+      })
+    }
+  }
+  const seen = new Set()
+  for (let index = 0; index < bubbleLog.length;) {
+    const item = bubbleLog[index]
+    const progress = bySession.get(item?.event?.taskProgress?.sessionKey)
+    if (!progress) {
+      index += 1
+      continue
+    }
+    item.event = { ...item.event, taskProgress: progress }
+    item.mergeKey = `task:${progress.taskId}`
+    item.title = bubbleTitle(item.event)
+    if (seen.has(item.mergeKey)) {
+      bubbleLog.splice(index, 1)
+      continue
+    }
+    seen.add(item.mergeKey)
+    index += 1
+  }
+  if (bubbleLog.length) renderBubbles()
+}
+
+function agentTaskStatusLabel(status) {
+  return {
+    idle: '待开始',
+    running: '进行中',
+    waiting: '等待你',
+    done: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }[status] || status || '未知'
+}
+
+function agentTaskGroupOptions(sessionKey, currentTaskId) {
+  const tasks = agentTaskBoardState.todayTasks || []
+  return [
+    `<option value="${escapeHtml(currentTaskId)}">当前任务</option>`,
+    ...tasks
+      .filter(task => task.id !== currentTaskId)
+      .map(task => `<option value="${escapeHtml(task.id)}">移到：${escapeHtml(shortText(task.title, 36))}</option>`),
+    '<option value="__new__">＋ 新建任务组…</option>',
+  ].join('')
+}
+
+function renderAgentTaskBoard() {
+  if (!agentTaskBoardList) return
+  const tasks = (agentTaskBoardState.todayTasks || []).slice()
+    .sort((a, b) => (
+      ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[a.status] ?? 9)
+      - ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[b.status] ?? 9)
+      || Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || '')
+    ))
+  const counts = agentTaskBoardState.counts || {}
+  if (agentTaskBoardSummary) {
+    agentTaskBoardSummary.textContent = `${tasks.length} 个任务 · ${counts.done || 0} 完成 · ${counts.waiting || 0} 等待`
+  }
+  if (agentTaskBoardRunning) {
+    agentTaskBoardRunning.textContent = `${counts.running || 0} 进行中`
+  }
+  if (metricTasks) metricTasks.textContent = String(tasks.length)
+  if (!tasks.length) {
+    agentTaskBoardList.className = 'agent-task-board-list empty'
+    agentTaskBoardList.textContent = 'Agent 开始工作后，会在这里持续更新进度'
+    return
+  }
+  agentTaskBoardList.className = 'agent-task-board-list'
+  agentTaskBoardList.innerHTML = tasks.map((task) => {
+    const sessions = Array.isArray(task.sessions) ? task.sessions : []
+    const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
+    const sessionSummary = `${task.doneSessions || 0}/${task.sessionCount || sessions.length} Session 完成`
+    return [
+      `<article class="agent-task-card" data-status="${escapeHtml(task.status)}" data-agent-task-id="${escapeHtml(task.id)}">`,
+      '<div class="agent-task-card-head">',
+      '<div>',
+      `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
+      `<span>${escapeHtml(agentTaskStatusLabel(task.status))} · ${escapeHtml(sessionSummary)}</span>`,
+      '</div>',
+      `<button type="button" data-agent-task-rename="${escapeHtml(task.id)}" title="重命名任务">重命名</button>`,
+      '</div>',
+      '<div class="agent-task-progress">',
+      `<progress max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress>`,
+      `<span>${percent}%</span>`,
+      '</div>',
+      task.currentStep ? `<p class="agent-task-current">当前：${escapeHtml(shortText(task.currentStep, 86))}</p>` : '',
+      '<div class="agent-task-sessions">',
+      ...sessions
+        .slice()
+        .sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
+        .map((session) => [
+          '<div class="agent-session-row">',
+          `<button type="button" data-agent-session-open="${escapeHtml(session.key)}"${session.target ? '' : ' disabled'}>`,
+          `<span>${escapeHtml(session.title || session.agent || 'Session')}</span>`,
+          `<small>${escapeHtml(agentTaskStatusLabel(session.status))} · ${Math.round(Number(session.progress || 0))}%${session.agent ? ` · ${escapeHtml(session.agent)}` : ''}</small>`,
+          '</button>',
+          `<select data-agent-session-group="${escapeHtml(session.key)}" data-current-task="${escapeHtml(task.id)}" aria-label="调整 Session 分组">`,
+          agentTaskGroupOptions(session.key, task.id),
+          '</select>',
+          '</div>',
+        ].join('')),
+      '</div>',
+      '</article>',
+    ].join('')
+  }).join('')
+}
+
+function agentSessionByKey(key) {
+  for (const task of agentTaskBoardState.tasks || []) {
+    const session = (task.sessions || []).find(item => item.key === key)
+    if (session) return session
+  }
+  return null
+}
+
+async function assignAgentSession(select) {
+  const sessionKey = select?.dataset.agentSessionGroup || ''
+  const currentTaskId = select?.dataset.currentTask || ''
+  const targetTaskId = select?.value || ''
+  if (!sessionKey || !targetTaskId || targetTaskId === currentTaskId) return
+  let request = { sessionKey, taskId: targetTaskId }
+  if (targetTaskId === '__new__') {
+    const session = agentSessionByKey(sessionKey)
+    const title = window.prompt('新任务组名称', session?.title || '新任务')
+    if (!title?.trim()) {
+      select.value = currentTaskId
+      return
+    }
+    request = { sessionKey, title: title.trim() }
+  }
+  select.disabled = true
+  try {
+    const result = await window.pet.assignAgentSession?.(request)
+    if (!result?.ok) {
+      say(`归组失败：${result?.error || '未知错误'}`, 3000)
+      select.value = currentTaskId
+      return
+    }
+    agentTaskBoardState = normalizeAgentTaskBoardState(result.state)
+    reconcileBubbleTaskProgress()
+    renderAgentTaskBoard()
+  } catch (error) {
+    say(`归组失败：${error?.message || error}`, 3000)
+    select.value = currentTaskId
+  } finally {
+    select.disabled = false
+  }
+}
+
+async function renameAgentTask(taskId) {
+  const task = (agentTaskBoardState.tasks || []).find(item => item.id === taskId)
+  if (!task) return
+  const title = window.prompt('任务名称', task.title || '')
+  if (!title?.trim() || title.trim() === task.title) return
+  try {
+    const result = await window.pet.renameAgentTask?.({ taskId, title: title.trim() })
+    if (!result?.ok) {
+      say(`重命名失败：${result?.error || '未知错误'}`, 3000)
+      return
+    }
+    agentTaskBoardState = normalizeAgentTaskBoardState(result.state)
+    reconcileBubbleTaskProgress()
+    renderAgentTaskBoard()
+  } catch (error) {
+    say(`重命名失败：${error?.message || error}`, 3000)
+  }
+}
+
 function larkMessageTarget(message) {
   if (!message?.chatId) return null
   return {
@@ -3453,6 +3761,7 @@ function syncEventPanel() {
   }
   renderEventList(waitingEvents, waiting.slice(0, 6))
   renderEventList(doneEvents, done.slice(0, 8))
+  renderAgentTaskBoard()
   renderSessionList(sessionEvents, openableEvents().slice(0, 8))
   renderLarkInbox()
   renderEventList(recentEvents, eventLog.slice(0, 8))

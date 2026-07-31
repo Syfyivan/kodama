@@ -8,6 +8,7 @@ const { createPomodoro } = require('./pomodoro')
 const { createCustomPetStyleStore } = require('./custom-pet-styles')
 const { mapHookToEvent } = require('./hook-events')
 const { createAgentEventContext } = require('./agent-event-context')
+const { createAgentTaskBoard } = require('./agent-task-board')
 const { larkChatUrls } = require('./lark-links')
 const { larkPasteScript, selectLarkAppName } = require('./lark-draft-apply')
 const { createLarkInbox } = require('./lark-inbox')
@@ -83,6 +84,7 @@ let workItemStore = null
 let workItemSyncTimer = null
 let workItemSyncPending = null
 let knowledgeHub = null
+let agentTaskBoard = null
 let customPetStyleStore = null
 let larkAssistantResults = new Map()
 let larkAssistantResultsLoaded = false
@@ -439,6 +441,68 @@ function startWorkItemStore() {
   workItemSyncTimer.unref?.()
   setTimeout(syncWorkItemsInBackground, 5000).unref?.()
   return workItemStore
+}
+
+function agentTaskBoardStateFile() {
+  return path.join(app.getPath('userData'), 'kodama-agent-task-board.json')
+}
+
+function broadcastAgentTaskBoard(snapshot) {
+  const state = snapshot || agentTaskBoard?.getState?.() || {
+    ok: true,
+    tasks: [],
+    todayTasks: [],
+    counts: { total: 0, today: 0, running: 0, waiting: 0, done: 0, failed: 0 },
+    updatedAt: new Date().toISOString(),
+  }
+  sendToPet('pet:agent-task-board-updated', state)
+  sendToLarkWorkbench('pet:agent-task-board-updated', state)
+  return state
+}
+
+function startAgentTaskBoard() {
+  if (agentTaskBoard) return agentTaskBoard
+  agentTaskBoard = createAgentTaskBoard({
+    file: agentTaskBoardStateFile(),
+  })
+  if (!agentTaskBoard.getState().tasks.length) {
+    try {
+      const today = new Date().toDateString()
+      const receipts = fs.readFileSync(hookReceiptLogFile(), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .slice(-600)
+        .map((line) => {
+          try { return JSON.parse(line) } catch { return null }
+        })
+        .filter(receipt => (
+          receipt?.mappedType
+          && receipt?.receivedAt
+          && new Date(receipt.receivedAt).toDateString() === today
+        ))
+      for (const receipt of receipts) {
+        agentTaskBoard.record({
+          ...(receipt.fields || {}),
+          type: receipt.mappedType,
+          source: 'local',
+          text: receipt.mappedText || receipt.fields?.message || '',
+          sessionId: receipt.mappedSessionId || receipt.fields?.sessionId || receipt.fields?.session_id || '',
+          cwd: receipt.mappedCwd || receipt.fields?.cwd || '',
+          receivedAt: receipt.receivedAt,
+        })
+      }
+      if (receipts.length) agentTaskBoard.flush()
+    } catch {
+      // First launch or a rotated hook log: live events will populate the board.
+    }
+  }
+  return agentTaskBoard
+}
+
+function trackAgentTaskEvent(event) {
+  const result = startAgentTaskBoard().record(event)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
 }
 
 function syncWorkItemsInBackground() {
@@ -884,6 +948,7 @@ function createLarkWorkbenchWindow() {
     sendToLarkWorkbench('pet:lark-inbox-updated', larkInbox?.getSnapshot?.() || {})
     sendToLarkWorkbench('pet:lark-assistant-updated', larkAssistantState())
     sendToLarkWorkbench('pet:work-items-updated', startWorkItemStore().getState())
+    sendToLarkWorkbench('pet:agent-task-board-updated', startAgentTaskBoard().getState())
     sendToLarkWorkbench('pet:knowledge-updated', startKnowledgeHub().getState())
     sendToLarkWorkbench('pet:lark-agenda-updated', startLarkAgenda().getState())
     scheduleCurrentLarkAttentionAnalysis()
@@ -2515,6 +2580,26 @@ ipcMain.handle('pet:work-items-state', () => {
   return startWorkItemStore().getState()
 })
 
+ipcMain.handle('pet:agent-task-board', () => {
+  return startAgentTaskBoard().getState()
+})
+
+ipcMain.handle('pet:agent-task-event', (_e, event) => {
+  return trackAgentTaskEvent(event)
+})
+
+ipcMain.handle('pet:agent-task-assign-session', (_e, request) => {
+  const result = startAgentTaskBoard().assignSession(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-rename', (_e, request) => {
+  const result = startAgentTaskBoard().renameTask(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
 ipcMain.handle('pet:work-item-create-from-assistant', (_e, request) => {
   return createWorkItemFromAssistant(request)
 })
@@ -3161,10 +3246,12 @@ function recordHookReceipt(data, event, urlPath) {
 function emitRendererAgentEvent(event) {
   if (!event || !win || win.isDestroyed()) return false
   const enrichedEvent = enrichCodexSessionTitle(event)
+  const tracked = trackAgentTaskEvent(enrichedEvent)
+  const deliveredEvent = tracked?.ok ? tracked.event : enrichedEvent
   localEventCount += 1
-  lastLocalEvent = { ...enrichedEvent, receivedAt: new Date().toISOString() }
-  if (petHidden && shouldWakeHiddenPet(enrichedEvent)) setPetHidden(false)
-  win.webContents.send('agent-event', enrichedEvent)
+  lastLocalEvent = { ...deliveredEvent, receivedAt: new Date().toISOString() }
+  if (petHidden && shouldWakeHiddenPet(deliveredEvent)) setPetHidden(false)
+  win.webContents.send('agent-event', deliveredEvent)
   return true
 }
 
@@ -3252,6 +3339,7 @@ function startLocalAgentServer() {
           workbenchStatus: larkWorkbenchStatus,
         },
         workItems: workItemStore?.getState?.() || null,
+        agentTaskBoard: agentTaskBoard?.getState?.() || null,
         knowledgeHub: knowledgeHub?.getState?.() || null,
         loginItemEnabled: isLoginItemEnabled(),
       })
@@ -3677,6 +3765,7 @@ app.whenReady().then(() => {
   startLarkWebPush()
   startLarkAgenda()
   startWorkItemStore()
+  startAgentTaskBoard()
   startKnowledgeHub()
   registerGlobalShortcuts()
   refreshTokenStats({ force: true })
@@ -3722,6 +3811,7 @@ app.on('will-quit', () => {
   larkWebPush?.stop?.()
   if (larkAgendaTimer) clearInterval(larkAgendaTimer)
   if (workItemSyncTimer) clearInterval(workItemSyncTimer)
+  agentTaskBoard?.flush?.()
   disposeAutoUpdater()
   globalShortcut.unregisterAll()
 })

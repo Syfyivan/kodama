@@ -12,7 +12,7 @@
     <header class="workbench-header">
       <div>
         <p class="eyebrow">KODAMA WORKBENCH</p>
-        <h1>飞书消息工作台</h1>
+        <h1>个人 AI 工作台</h1>
         <p id="workbench-status" class="workbench-status">正在读取消息…</p>
       </div>
       <div class="header-actions">
@@ -20,6 +20,7 @@
           <input id="attention-only" type="checkbox" checked />
           <span>只看私聊 / @我</span>
         </label>
+        <button id="toggle-agent-tasks" class="secondary" type="button">Agent 任务 0</button>
         <button id="toggle-agenda" class="secondary" type="button">会议 0</button>
         <button id="toggle-work-items" class="secondary" type="button">工作项 0</button>
         <button id="toggle-knowledge" class="secondary" type="button">知识库 0</button>
@@ -43,6 +44,24 @@
         </div>
       </section>
     </main>
+
+    <aside id="agent-task-drawer" class="work-item-drawer agent-task-drawer" hidden aria-label="Agent 任务进度">
+      <div class="work-item-drawer-head">
+        <div>
+          <p class="eyebrow">TASKS → SESSIONS → STEPS</p>
+          <h2>今日 Agent 任务</h2>
+          <p id="agent-task-status">正在读取任务进度…</p>
+        </div>
+        <div class="work-item-drawer-actions">
+          <button id="refresh-agent-tasks" class="secondary" type="button">刷新</button>
+          <button id="close-agent-tasks" class="quiet" type="button" aria-label="关闭 Agent 任务">关闭</button>
+        </div>
+      </div>
+      <div class="agent-task-help">
+        一个任务可以包含多个 Session。用每个 Session 右侧的“归组”菜单，把并行或连续会话放到同一任务下；没有显式百分比时，进度会按开始、分析、实现、验证、提交阶段估算。
+      </div>
+      <div id="agent-task-list" class="agent-task-list empty">暂无今日 Agent 任务</div>
+    </aside>
 
     <aside id="agenda-drawer" class="work-item-drawer agenda-drawer" hidden aria-label="近期会议">
       <div class="work-item-drawer-head">

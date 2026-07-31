@@ -83,7 +83,19 @@ PET_SYNC_MODE=safe         # safe=脱敏+截断摘要(默认推荐)；full=本�
 
 **事件类型**：`lark_message_received`（看手机）/ `task_started`（开工）/ `task_progress`（进度）/ `session_changed`（切换持久会话）/ `lark_reply_sent`（回复摘要）/ `task_waiting`（待交互）/ `agent_done`（子 Agent 完成）/ `task_done`（撒花）/ `task_failed`（报错）。
 
-菜单栏 Kodama 的「事件 / 配置面板」会保留最近事件、待交互项、Agent 完成项、可跳转会话和当前 bridge/hook 状态；气泡错过时可以从这里回看。气泡本身可点击：只有一个可跳转会话时直接打开；多个会话时打开列表。当前优先跳到飞书 chat，若事件 payload 将来带明确 URL，会优先打开该 URL。
+菜单栏 Kodama 的「今日任务 / Agent」面板会保留任务进度、最近事件、待交互项、Agent 完成项、可跳转会话和当前 bridge/hook 状态；气泡错过时可以从这里回看。气泡本身会随着 `task_started / task_progress / task_done` 原地更新，展示任务总进度、当前步骤和 Session 完成数；点击「查看任务」进入任务面板，点击气泡主体仍会打开当前会话。
+
+## Agent 任务进度与 Session 归组
+
+Kodama 不再把一次 Session 等同于一个任务。事件会先进入持久化任务板，再同时提供给桌宠气泡、桌宠面板和完整工作台：
+
+- 数据层级是 `任务 → Session → 最近步骤`。每个 Session 独立记录状态和进度，任务进度按组内 Session 聚合；事件有显式百分比时直接采用，否则按开始、分析、实现、验证、提交等公开阶段估算。
+- 同一个 Session 的过程事件会更新同一张气泡，不会等会话结束才出现；多个 Session 归组后，气泡会合并为一张任务卡。
+- 桌宠面板的「任务」页和完整工作台顶部的「Agent 任务」都展示今日任务、总体百分比、当前步骤、Session 数量和各 Session 最近三步。
+- 每个 Session 都有「归组」菜单，可以移动到今天已有任务，或现场新建任务组；任务名称也可以随时重命名。
+- 子 Agent 会自动跟随父 Session 所在任务；带 `taskGroupId / workItemId / goalId / contextKey` 的事件会自动进入同一任务。
+- 任务板保存在 Electron `userData` 下的 `kodama-agent-task-board.json`，最多保留 90 个任务、每任务 24 个 Session、每 Session 最近 12 步；可能包含凭据的常见参数会在落盘前脱敏。
+- 首次升级且任务板为空时，会从当天已有的 Kodama hook 回执中回填最多 600 条过程事件，所以升级前已经开始的本机会话也能出现在今日任务中。
 
 ## 飞书群消息 inbox
 
@@ -113,12 +125,13 @@ pnpm run lark:base:setup
 
 ## 飞书消息工作台
 
-运行 `pnpm run workbench`，或从桌宠面板 / 菜单栏打开「飞书消息工作台」：
+运行 `pnpm run workbench`，或从桌宠面板 / 菜单栏打开「个人 AI 工作台」：
 
 - 默认只列出私聊和 @ 我的群消息。新出现的需处理消息会按顺序自动交给本机 Bridge 分析；也可以点「重新理解」刷新结果。
 - 分析会带上同一会话最近上下文，并允许 Agent 按需只读检索相关飞书文档或 ByteTech 内容。消息正文会按不可信数据处理，不能覆盖 Agent 的安全边界。
 - 总结、意图、相关文档、待办、风险和回复草稿集中展示。草稿可以继续编辑；「应用到飞书输入框」只负责打开原会话并粘贴，**不会替你发送**。
 - 每个待办或风险点都能直接一键「飞书任务」「Agent 计划」或「Agent 执行」，无需先到工作项抽屉二次操作。
+- 顶部「Agent 任务」会把今天所有 Agent 工作按任务聚合展示；一个任务可以容纳多个并行或连续 Session，并能从最近步骤直接跳回具体会话。
 - 工作项保留 `critical / high / medium / low` 本地优先级；创建飞书任务时会写进任务描述并明确分配给当前登录用户。远端完成或重新打开会自动同步回 Kodama，Kodama 的完成 / 重新打开也会同步到飞书。
 - 顶部「会议」会读取当前用户未来 7 天的飞书日程，可直接打开日程或加入视频会议；每 30 分钟自动刷新。
 - 「个人知识库」支持 ByteTech 检索、GitHub 近 7 天热门项目、飞书文档搜索、打开 X、从剪贴板收集推文/链接，以及随手记录想法；收藏后可交给 Agent 总结并生成标签。

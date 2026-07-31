@@ -27,7 +27,7 @@
     <div id="bubble" class="hidden"></div>
     <section id="event-panel" class="hidden">
       <header class="panel-header">
-        <strong><span class="drag-handle" title="拖动移动桌宠">⠿</span> 事件 / 配置</strong>
+        <strong><span class="drag-handle" title="拖动移动桌宠">⠿</span> 今日任务 / Agent</strong>
         <button id="event-panel-close" type="button" title="关闭">×</button>
       </header>
       <div id="panel-status" class="panel-status" aria-live="polite"></div>
@@ -36,12 +36,13 @@
         <button id="manage-open" type="button" title="打开 Kodama 管理 / 设置中心(独立窗口)">管理中心</button>
       </div>
       <div class="panel-metrics">
+        <button type="button" data-tab="tasks"><span id="metric-tasks">0</span><small>今日任务</small></button>
         <button type="button" data-tab="waiting"><span id="metric-waiting">0</span><small>待交互</small></button>
         <button type="button" data-tab="done"><span id="metric-done">0</span><small>已完成</small></button>
         <button type="button" data-tab="lark-inbox"><span id="metric-inbox">0</span><small>需处理</small></button>
-        <button type="button" data-tab="recent"><span id="metric-total">0</span><small>事件</small></button>
       </div>
       <nav id="panel-tabs" class="panel-tabs" aria-label="事件面板">
+        <button type="button" data-tab="tasks" aria-label="今日 Agent 任务" title="今日 Agent 任务">任务</button>
         <button type="button" data-tab="appearance" aria-label="精灵衣橱" title="精灵衣橱">衣橱</button>
         <button type="button" data-tab="settings" aria-label="设置" title="设置">设置</button>
         <button type="button" data-tab="waiting" aria-label="待交互" title="待交互">待办</button>
@@ -51,6 +52,16 @@
         <button type="button" data-tab="bridge" aria-label="Bridge 任务" title="Bridge 任务">Bridge</button>
         <button type="button" data-tab="recent" aria-label="最近事件" title="最近事件">最近</button>
       </nav>
+      <div class="panel-section tab-panel" data-tab-panel="tasks">
+        <div class="agent-task-board-head">
+          <div>
+            <h2>今日 Agent 任务</h2>
+            <p id="agent-task-board-summary">还没有收到任务事件</p>
+          </div>
+          <span id="agent-task-board-running">0 进行中</span>
+        </div>
+        <div id="agent-task-board-list" class="agent-task-board-list empty">Agent 开始工作后，会在这里持续更新进度</div>
+      </div>
       <div id="appearance-panel" class="panel-section tab-panel appearance-panel" data-tab-panel="appearance">
         <div class="appearance-heading">
           <div>

@@ -6,6 +6,12 @@ const messageCount = document.getElementById('message-count')
 const messageList = document.getElementById('message-list')
 const detail = document.getElementById('message-detail')
 const toast = document.getElementById('workbench-toast')
+const toggleAgentTasksButton = document.getElementById('toggle-agent-tasks')
+const agentTaskDrawer = document.getElementById('agent-task-drawer')
+const agentTaskStatus = document.getElementById('agent-task-status')
+const agentTaskList = document.getElementById('agent-task-list')
+const refreshAgentTasksButton = document.getElementById('refresh-agent-tasks')
+const closeAgentTasksButton = document.getElementById('close-agent-tasks')
 const toggleAgendaButton = document.getElementById('toggle-agenda')
 const agendaDrawer = document.getElementById('agenda-drawer')
 const agendaStatus = document.getElementById('agenda-status')
@@ -42,6 +48,13 @@ const state = {
   draftEdits: new Map(),
   agenda: { events: [], count: 0, loading: false, error: '', updatedAt: '', range: {} },
   agendaDrawerOpen: false,
+  agentTasks: {
+    tasks: [],
+    todayTasks: [],
+    counts: { total: 0, today: 0, running: 0, waiting: 0, done: 0, failed: 0 },
+    updatedAt: '',
+  },
+  agentTaskDrawerOpen: false,
   workItems: { items: [], count: 0, openCount: 0, runningCount: 0 },
   workItemDrawerOpen: false,
   workItemBusy: new Set(),
@@ -121,6 +134,26 @@ function normalizeWorkItems(value) {
     count: Number(value?.count ?? items.length),
     openCount: Number(value?.openCount ?? items.filter(item => item.status === 'open').length),
     runningCount: Number(value?.runningCount ?? items.filter(item => item.status === 'running').length),
+  }
+}
+
+function normalizeAgentTasks(value) {
+  const tasks = Array.isArray(value?.tasks) ? value.tasks : []
+  const todayTasks = Array.isArray(value?.todayTasks)
+    ? value.todayTasks
+    : tasks.filter(task => task.isToday !== false)
+  return {
+    tasks,
+    todayTasks,
+    counts: {
+      total: Number(value?.counts?.total ?? tasks.length),
+      today: Number(value?.counts?.today ?? todayTasks.length),
+      running: Number(value?.counts?.running ?? todayTasks.filter(task => task.status === 'running').length),
+      waiting: Number(value?.counts?.waiting ?? todayTasks.filter(task => task.status === 'waiting').length),
+      done: Number(value?.counts?.done ?? todayTasks.filter(task => task.status === 'done').length),
+      failed: Number(value?.counts?.failed ?? todayTasks.filter(task => task.status === 'failed').length),
+    },
+    updatedAt: String(value?.updatedAt || ''),
   }
 }
 
@@ -353,6 +386,166 @@ function renderDetail() {
     '</section>',
     assistantHtml(message, record),
   ].join('')
+}
+
+function agentTaskStatusLabel(value) {
+  return {
+    idle: '待开始',
+    running: '进行中',
+    waiting: '等待你',
+    done: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }[value] || value || '未知'
+}
+
+function agentSessionGroupOptions(currentTaskId) {
+  return [
+    `<option value="${escapeHtml(currentTaskId)}">当前任务</option>`,
+    ...state.agentTasks.todayTasks
+      .filter(task => task.id !== currentTaskId)
+      .map(task => `<option value="${escapeHtml(task.id)}">移到：${escapeHtml(shortText(task.title, 42))}</option>`),
+    '<option value="__new__">＋ 新建任务组…</option>',
+  ].join('')
+}
+
+function renderAgentTasks() {
+  const tasks = state.agentTasks.todayTasks.slice().sort((a, b) => (
+    ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[a.status] ?? 9)
+    - ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[b.status] ?? 9)
+    || Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || '')
+  ))
+  const counts = state.agentTasks.counts
+  toggleAgentTasksButton.textContent = `Agent 任务 ${tasks.length}`
+  toggleAgentTasksButton.classList.toggle('primary', state.agentTaskDrawerOpen)
+  toggleAgentTasksButton.classList.toggle('secondary', !state.agentTaskDrawerOpen)
+  agentTaskDrawer.hidden = !state.agentTaskDrawerOpen
+  agentTaskStatus.textContent = `${counts.running} 个进行中 · ${counts.waiting} 个等待 · ${counts.done} 个完成${state.agentTasks.updatedAt ? ` · ${fmtTime(state.agentTasks.updatedAt)}` : ''}`
+
+  if (!tasks.length) {
+    agentTaskList.className = 'agent-task-list empty'
+    agentTaskList.textContent = 'Agent 开始工作后，会按任务持续记录 Session 和当前步骤'
+    return
+  }
+  agentTaskList.className = 'agent-task-list'
+  agentTaskList.innerHTML = tasks.map((task) => {
+    const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
+    const sessions = Array.isArray(task.sessions) ? task.sessions.slice() : []
+    sessions.sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
+    return [
+      `<article class="agent-task-card" data-status="${escapeHtml(task.status)}">`,
+      '<div class="agent-task-title-row">',
+      '<div>',
+      `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
+      `<p>${escapeHtml(agentTaskStatusLabel(task.status))} · ${task.doneSessions || 0}/${task.sessionCount || sessions.length} Session 完成</p>`,
+      '</div>',
+      `<button type="button" data-agent-task-rename="${escapeHtml(task.id)}">重命名</button>`,
+      '</div>',
+      '<div class="agent-task-progress-row">',
+      `<progress max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress><strong>${percent}%</strong>`,
+      '</div>',
+      task.currentStep ? `<p class="agent-task-current-step"><span>当前</span>${escapeHtml(task.currentStep)}</p>` : '',
+      '<div class="agent-session-list">',
+      ...sessions.map((session) => {
+        const steps = Array.isArray(session.steps) ? session.steps.slice(-3).reverse() : []
+        return [
+          '<section class="agent-session-card">',
+          '<div class="agent-session-head">',
+          '<div>',
+          `<strong>${escapeHtml(session.title || session.agent || 'Session')}</strong>`,
+          `<p>${escapeHtml(agentTaskStatusLabel(session.status))} · ${Math.round(Number(session.progress || 0))}%${session.agent ? ` · ${escapeHtml(session.agent)}` : ''}${session.app ? ` · ${escapeHtml(session.app)}` : ''}</p>`,
+          '</div>',
+          '<div class="agent-session-actions">',
+          session.target ? `<button type="button" data-agent-session-open="${escapeHtml(session.key)}">打开</button>` : '',
+          `<select data-agent-session-group="${escapeHtml(session.key)}" data-current-task="${escapeHtml(task.id)}" aria-label="调整 Session 分组">${agentSessionGroupOptions(task.id)}</select>`,
+          '</div>',
+          '</div>',
+          session.currentStep ? `<p class="agent-session-current">${escapeHtml(session.currentStep)}</p>` : '',
+          steps.length
+            ? `<ol class="agent-session-steps">${steps.map(step => `<li><time>${escapeHtml(fmtTime(step.at))}</time><span>${escapeHtml(step.text)}</span></li>`).join('')}</ol>`
+            : '',
+          '</section>',
+        ].join('')
+      }),
+      '</div>',
+      '</article>',
+    ].join('')
+  }).join('')
+}
+
+function agentSessionByKey(key) {
+  for (const task of state.agentTasks.tasks) {
+    const session = (task.sessions || []).find(item => item.key === key)
+    if (session) return session
+  }
+  return null
+}
+
+async function refreshAgentTasks() {
+  refreshAgentTasksButton.disabled = true
+  refreshAgentTasksButton.textContent = '刷新中…'
+  try {
+    state.agentTasks = normalizeAgentTasks(await window.pet.agentTaskBoard())
+  } catch (error) {
+    showToast(`读取任务进度失败：${error?.message || error}`)
+  } finally {
+    refreshAgentTasksButton.disabled = false
+    refreshAgentTasksButton.textContent = '刷新'
+    render()
+  }
+}
+
+async function assignAgentSession(select) {
+  const sessionKey = select.dataset.agentSessionGroup
+  const currentTaskId = select.dataset.currentTask
+  const value = select.value
+  if (!sessionKey || !value || value === currentTaskId) return
+  let request = { sessionKey, taskId: value }
+  if (value === '__new__') {
+    const session = agentSessionByKey(sessionKey)
+    const title = window.prompt('新任务组名称', session?.title || '新任务')
+    if (!title?.trim()) {
+      select.value = currentTaskId
+      return
+    }
+    request = { sessionKey, title: title.trim() }
+  }
+  select.disabled = true
+  try {
+    const result = await window.pet.assignAgentSession(request)
+    if (!result?.ok) {
+      showToast(`归组失败：${result?.error || '未知错误'}`)
+      select.value = currentTaskId
+      return
+    }
+    state.agentTasks = normalizeAgentTasks(result.state)
+    showToast('Session 已归入任务')
+  } catch (error) {
+    showToast(`归组失败：${error?.message || error}`)
+    select.value = currentTaskId
+  } finally {
+    select.disabled = false
+    render()
+  }
+}
+
+async function renameAgentTask(taskId) {
+  const task = state.agentTasks.tasks.find(item => item.id === taskId)
+  if (!task) return
+  const title = window.prompt('任务名称', task.title || '')
+  if (!title?.trim() || title.trim() === task.title) return
+  try {
+    const result = await window.pet.renameAgentTask({ taskId, title: title.trim() })
+    if (!result?.ok) {
+      showToast(`重命名失败：${result?.error || '未知错误'}`)
+      return
+    }
+    state.agentTasks = normalizeAgentTasks(result.state)
+    showToast('任务名称已更新')
+    render()
+  } catch (error) {
+    showToast(`重命名失败：${error?.message || error}`)
+  }
 }
 
 function priorityLabel(value) {
@@ -618,6 +811,7 @@ function render() {
   renderStatus()
   renderMessageList()
   renderDetail()
+  renderAgentTasks()
   renderAgenda()
   renderWorkItems()
   renderKnowledge()
@@ -944,9 +1138,44 @@ detail.addEventListener('click', (event) => {
   }
 })
 
+toggleAgentTasksButton.addEventListener('click', () => {
+  state.agentTaskDrawerOpen = !state.agentTaskDrawerOpen
+  if (state.agentTaskDrawerOpen) {
+    state.workItemDrawerOpen = false
+    state.knowledgeDrawerOpen = false
+    state.agendaDrawerOpen = false
+  }
+  render()
+})
+
+closeAgentTasksButton.addEventListener('click', () => {
+  state.agentTaskDrawerOpen = false
+  render()
+})
+
+refreshAgentTasksButton.addEventListener('click', refreshAgentTasks)
+
+agentTaskList.addEventListener('click', (event) => {
+  const rename = event.target.closest('[data-agent-task-rename]')
+  if (rename) {
+    renameAgentTask(rename.dataset.agentTaskRename)
+    return
+  }
+  const open = event.target.closest('[data-agent-session-open]')
+  if (!open) return
+  const session = agentSessionByKey(open.dataset.agentSessionOpen)
+  if (session?.target) window.pet.openTarget(session.target)
+})
+
+agentTaskList.addEventListener('change', (event) => {
+  const select = event.target.closest('[data-agent-session-group]')
+  if (select) assignAgentSession(select)
+})
+
 toggleWorkItemsButton.addEventListener('click', () => {
   state.workItemDrawerOpen = !state.workItemDrawerOpen
   if (state.workItemDrawerOpen) {
+    state.agentTaskDrawerOpen = false
     state.knowledgeDrawerOpen = false
     state.agendaDrawerOpen = false
   }
@@ -963,6 +1192,7 @@ syncWorkItemsButton.addEventListener('click', syncAllWorkItems)
 toggleKnowledgeButton.addEventListener('click', () => {
   state.knowledgeDrawerOpen = !state.knowledgeDrawerOpen
   if (state.knowledgeDrawerOpen) {
+    state.agentTaskDrawerOpen = false
     state.workItemDrawerOpen = false
     state.agendaDrawerOpen = false
   }
@@ -977,6 +1207,7 @@ closeKnowledgeButton.addEventListener('click', () => {
 toggleAgendaButton.addEventListener('click', () => {
   state.agendaDrawerOpen = !state.agendaDrawerOpen
   if (state.agendaDrawerOpen) {
+    state.agentTaskDrawerOpen = false
     state.workItemDrawerOpen = false
     state.knowledgeDrawerOpen = false
   }
@@ -1098,6 +1329,11 @@ window.pet.onWorkItemsUpdate?.((workItems) => {
   render()
 })
 
+window.pet.onAgentTaskBoardUpdate?.((tasks) => {
+  state.agentTasks = normalizeAgentTasks(tasks)
+  render()
+})
+
 window.pet.onKnowledgeUpdate?.((knowledge) => {
   state.knowledge = normalizeKnowledge(knowledge)
   render()
@@ -1108,12 +1344,14 @@ Promise.all([
   window.pet.larkAssistantState?.(),
   window.pet.larkAgenda?.(),
   window.pet.workItemsState?.(),
+  window.pet.agentTaskBoard?.(),
   window.pet.knowledgeState?.(),
-]).then(([inbox, assistant, agenda, workItems, knowledge]) => {
+]).then(([inbox, assistant, agenda, workItems, agentTasks, knowledge]) => {
   state.inbox = normalizeInbox(inbox)
   state.assistant = normalizeAssistant(assistant)
   state.agenda = normalizeAgenda(agenda)
   state.workItems = normalizeWorkItems(workItems)
+  state.agentTasks = normalizeAgentTasks(agentTasks)
   state.knowledge = normalizeKnowledge(knowledge)
   render()
   syncWorkItemsInBackground()
