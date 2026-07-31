@@ -763,7 +763,7 @@ body.move-mode #pet-gif {
 
 .lark-inbox-tools {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
   gap: 6px;
   align-items: center;
   margin-bottom: 7px;
@@ -824,6 +824,15 @@ body.move-mode #pet-gif {
   z-index: 1;
   background: rgba(248, 251, 255, 0.96);
   color: #617085;
+  font-weight: 700;
+}
+
+.lark-message-item.needs-attention {
+  background: rgba(255, 247, 226, 0.92);
+}
+
+.lark-message-item.needs-attention td:last-child {
+  color: #b26718;
   font-weight: 700;
 }
 

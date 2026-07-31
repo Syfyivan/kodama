@@ -69,6 +69,7 @@ const sessionEvents = document.getElementById('session-events')
 const larkInboxEvents = document.getElementById('lark-inbox-events')
 const larkInboxRefresh = document.getElementById('lark-inbox-refresh')
 const larkInboxSummary = document.getElementById('lark-inbox-summary')
+const larkWorkbenchOpen = document.getElementById('lark-workbench-open')
 const larkWebPushOpen = document.getElementById('lark-web-push-open')
 const larkWebPushReload = document.getElementById('lark-web-push-reload')
 const larkBaseOpen = document.getElementById('lark-base-open')
@@ -206,7 +207,9 @@ let larkInboxState = {
   messages: [],
   chatCount: 0,
   messageCount: 0,
+  attentionCount: 0,
   newCount: 0,
+  currentUserReady: false,
   updatedAt: '',
 }
 let larkWebPushState = {
@@ -2341,6 +2344,7 @@ function setupEventPanel() {
   bridgeTasksShare?.addEventListener('click', () => shareBridgeTaskViewer())
   bridgeTasksWindow?.addEventListener('click', () => openBridgeTasksWindow())
   larkInboxRefresh?.addEventListener('click', () => refreshLarkInbox({ force: true }))
+  larkWorkbenchOpen?.addEventListener('click', () => window.pet.openLarkWorkbench?.())
   larkWebPushOpen?.addEventListener('click', () => openLarkWebPushWindow())
   larkWebPushReload?.addEventListener('click', () => reloadLarkWebPushWindow())
   larkBaseOpen?.addEventListener('click', () => openLarkBaseTable())
@@ -3071,7 +3075,7 @@ function renderLarkInbox() {
     : state.error
       ? `读取失败：${state.error}`
       : state.loaded
-        ? `${state.chatCount || 0} 个群 · ${state.messageCount || 0} 条 · ${webPushText} · ${baseText}${updated ? ` · ${updated}` : ''}`
+        ? `${state.attentionCount || 0} 条需处理 · ${state.chatCount || 0} 个会话 · ${state.messageCount || 0} 条 · ${webPushText} · ${baseText}${updated ? ` · ${updated}` : ''}`
         : '尚未读取'
   larkInboxSummary.textContent = status
   if (larkInboxRefresh) {
@@ -3088,7 +3092,12 @@ function renderLarkInbox() {
       : '先运行 pnpm run lark:base:setup 创建并绑定多维表格'
   }
 
-  const messages = Array.isArray(state.messages) ? state.messages.slice(0, 16) : []
+  const messages = Array.isArray(state.messages)
+    ? state.messages
+      .slice()
+      .sort((a, b) => Number(Boolean(b.needsAttention)) - Number(Boolean(a.needsAttention)))
+      .slice(0, 16)
+    : []
   if (!messages.length) {
     larkInboxEvents.className = 'event-list empty'
     larkInboxEvents.textContent = state.loaded ? '暂无最近群消息' : '尚未加载'
@@ -3097,19 +3106,21 @@ function renderLarkInbox() {
   larkInboxEvents.className = 'event-list lark-inbox-list'
   larkInboxEvents.innerHTML = [
     '<table class="lark-message-table">',
-    '<thead><tr><th>时间</th><th>群</th><th>发送人</th><th>内容</th><th>来源</th></tr></thead>',
+    '<thead><tr><th>时间</th><th>会话</th><th>发送人</th><th>内容</th><th>状态</th></tr></thead>',
     '<tbody>',
     messages.map((message) => {
       const text = message.content || `[${message.msgType || 'message'}]`
       const type = message.msgType && message.msgType !== 'text' ? ` ${message.msgType}` : ''
-      const source = message.source === 'web-push' ? '实时' : '轮询'
+      const status = message.needsAttention
+        ? message.attentionReason === 'p2p' ? '私聊' : '@我'
+        : message.source === 'web-push' ? '实时' : '普通'
       return [
-        `<tr class="lark-message-item" data-lark-message-id="${escapeHtml(message.messageId || '')}">`,
+        `<tr class="lark-message-item${message.needsAttention ? ' needs-attention' : ''}" data-lark-message-id="${escapeHtml(message.messageId || '')}">`,
         `<td>${escapeHtml(fmtTime(message.createdAt || message.createTime))}</td>`,
         `<td title="${escapeHtml(message.chatName || '飞书群聊')}">${escapeHtml(shortText(message.chatName || '飞书群聊', 18))}</td>`,
         `<td title="${escapeHtml(message.senderName || '成员')}">${escapeHtml(shortText(message.senderName || '成员', 14))}</td>`,
         `<td title="${escapeHtml(text)}">${escapeHtml(shortText(text, 58))}${escapeHtml(type)}</td>`,
-        `<td>${escapeHtml(source)}</td>`,
+        `<td>${escapeHtml(status)}</td>`,
         '</tr>',
       ].join('')
     }).join(''),
@@ -3185,7 +3196,9 @@ function normalizeLarkInboxState(snapshot, loaded = true) {
     messages,
     chatCount: Number(snapshot?.chatCount || chats.length || 0),
     messageCount: Number(snapshot?.messageCount || messages.length || 0),
+    attentionCount: Number(snapshot?.attentionCount || messages.filter(message => message.needsAttention).length || 0),
     newCount: Number(snapshot?.newCount || 0),
+    currentUserReady: snapshot?.currentUserReady === true,
     updatedAt: snapshot?.updatedAt || '',
   }
 }
@@ -3425,17 +3438,17 @@ function syncEventPanel() {
   const done = eventLog.filter(isDone)
   if (metricWaiting) metricWaiting.textContent = String(waiting.length)
   if (metricDone) metricDone.textContent = String(done.length)
-  if (metricInbox) metricInbox.textContent = String(larkInboxState.messageCount || 0)
+  if (metricInbox) metricInbox.textContent = String(larkInboxState.attentionCount || 0)
   if (metricTotal) metricTotal.textContent = String(eventLog.length)
   if (panelStatus) {
     const statusText = agentSyncStatus === 'connected' ? 'Bridge 已连接' : 'Bridge 离线/重连中'
     const inboxText = larkInboxState.enabled === false
-      ? '群聊关闭'
+      ? '消息关闭'
       : larkInboxState.error
-        ? '群聊异常'
+        ? '消息异常'
         : larkInboxState.loading
-          ? '群聊刷新中'
-          : `群聊 ${larkInboxState.messageCount || 0}${larkWebPushState.running ? ' · 实时' : ''}`
+          ? '消息刷新中'
+          : `需处理 ${larkInboxState.attentionCount || 0}${larkWebPushState.running ? ' · 实时' : ''}`
     panelStatus.textContent = `${statusText} · Hook 127.0.0.1:7766 · ${inboxText}`
   }
   renderEventList(waitingEvents, waiting.slice(0, 6))

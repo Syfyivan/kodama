@@ -38,7 +38,7 @@
       <div class="panel-metrics">
         <button type="button" data-tab="waiting"><span id="metric-waiting">0</span><small>待交互</small></button>
         <button type="button" data-tab="done"><span id="metric-done">0</span><small>已完成</small></button>
-        <button type="button" data-tab="lark-inbox"><span id="metric-inbox">0</span><small>群聊</small></button>
+        <button type="button" data-tab="lark-inbox"><span id="metric-inbox">0</span><small>需处理</small></button>
         <button type="button" data-tab="recent"><span id="metric-total">0</span><small>事件</small></button>
       </div>
       <nav id="panel-tabs" class="panel-tabs" aria-label="事件面板">
@@ -47,7 +47,7 @@
         <button type="button" data-tab="waiting" aria-label="待交互" title="待交互">待办</button>
         <button type="button" data-tab="done" aria-label="已完成" title="已完成">完成</button>
         <button type="button" data-tab="sessions" aria-label="会话" title="会话">会话</button>
-        <button type="button" data-tab="lark-inbox" aria-label="飞书群消息" title="飞书群消息">群聊</button>
+        <button type="button" data-tab="lark-inbox" aria-label="飞书消息工作台" title="飞书消息工作台">消息</button>
         <button type="button" data-tab="bridge" aria-label="Bridge 任务" title="Bridge 任务">Bridge</button>
         <button type="button" data-tab="recent" aria-label="最近事件" title="最近事件">最近</button>
       </nav>
@@ -289,8 +289,9 @@
         <div id="session-events" class="event-list empty">暂无可跳转会话</div>
       </div>
       <div class="panel-section tab-panel" data-tab-panel="lark-inbox">
-        <h2>飞书群消息</h2>
+        <h2>飞书消息</h2>
         <div class="lark-inbox-tools">
+          <button id="lark-workbench-open" type="button">打开工作台</button>
           <button id="lark-inbox-refresh" type="button">刷新</button>
           <button id="lark-web-push-open" type="button">实时登录</button>
           <button id="lark-web-push-reload" type="button">重载实时</button>

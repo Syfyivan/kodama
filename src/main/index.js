@@ -9,10 +9,15 @@ const { createCustomPetStyleStore } = require('./custom-pet-styles')
 const { mapHookToEvent } = require('./hook-events')
 const { createAgentEventContext } = require('./agent-event-context')
 const { larkChatUrls } = require('./lark-links')
+const { larkPasteScript, selectLarkAppName } = require('./lark-draft-apply')
 const { createLarkInbox } = require('./lark-inbox')
 const { createLarkMessageArchive } = require('./lark-message-archive')
 const { createLarkBaseSink } = require('./lark-base-sink')
 const { createLarkWebPush } = require('./lark-web-push')
+const { createWorkItemStore } = require('./work-items')
+const { buildWorkItemAgentPrompt, normalizeMode, parseWorkItemAgentResult } = require('./work-item-agent')
+const { createKnowledgeHub } = require('./knowledge-hub')
+const { buildKnowledgeSummaryPrompt, parseKnowledgeSummary } = require('./knowledge-agent')
 const { enrichTraeEvent } = require('./trae-context')
 const { HOOK_AGENTS } = require('./agents/registry')
 const {
@@ -34,7 +39,9 @@ const {
   disposeAutoUpdater,
 } = require('./updater')
 const {
+  analyzeLarkMessage,
   bridgeTasks: loadBridgeTasks,
+  runCodexTask,
   shareBridgeTasks: createBridgeTasksShare,
   shareSession: createSessionShare,
 } = require('./bridge-client')
@@ -47,6 +54,7 @@ const LOCAL_AGENT_PORT = 7766
 let win
 let taskWin
 let manageWin
+let larkWorkbenchWin
 let lastUiSettings = null
 let tray
 let pomodoro = null
@@ -67,7 +75,14 @@ let larkInbox = null
 let larkArchive = null
 let larkBaseSink = null
 let larkWebPush = null
+let workItemStore = null
+let knowledgeHub = null
 let customPetStyleStore = null
+const larkAssistantResults = new Map()
+const larkAssistantPending = new Map()
+const workItemAgentPending = new Map()
+const knowledgeAgentPending = new Map()
+let larkWorkbenchStatus = { phase: 'idle', error: '', updatedAt: '' }
 const resolveCodexSessionTitle = createCodexSessionTitleResolver()
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
@@ -95,6 +110,12 @@ process.on('unhandledRejection', (err) => {
 
 function sendToPet(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+}
+
+function sendToLarkWorkbench(channel, payload) {
+  if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
+    larkWorkbenchWin.webContents.send(channel, payload)
+  }
 }
 
 function larkInboxStateFile() {
@@ -174,6 +195,7 @@ function startLarkInbox() {
     stateFile: larkInboxStateFile(),
     onUpdate(snapshot, meta = {}) {
       sendToPet('pet:lark-inbox-updated', snapshot)
+      sendToLarkWorkbench('pet:lark-inbox-updated', snapshot)
       archiveLarkMessages(snapshot.messages || [], { source: meta.reason || meta.source || 'inbox' })
       const newMessages = Array.isArray(meta.newMessages) ? meta.newMessages : []
       if (!newMessages.length) return
@@ -207,6 +229,352 @@ function startLarkWebPush() {
   })
   larkWebPush.start()
   return larkWebPush
+}
+
+function larkAssistantState() {
+  return {
+    ok: true,
+    results: Object.fromEntries(larkAssistantResults),
+    pending: Array.from(larkAssistantPending.keys()),
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function broadcastLarkAssistantState() {
+  const state = larkAssistantState()
+  sendToPet('pet:lark-assistant-updated', state)
+  sendToLarkWorkbench('pet:lark-assistant-updated', state)
+  return state
+}
+
+function larkMessageContext(messages, target, limit = 16) {
+  const targetTime = Date.parse(target?.createdAt || target?.createTime || '')
+  return (Array.isArray(messages) ? messages : [])
+    .filter(message => (
+      message?.chatId === target?.chatId
+      && message?.messageId !== target?.messageId
+      && (!Number.isFinite(targetTime) || Date.parse(message?.createdAt || message?.createTime || '') <= targetTime)
+    ))
+    .sort((a, b) => Date.parse(a?.createdAt || a?.createTime || '') - Date.parse(b?.createdAt || b?.createTime || ''))
+    .slice(-limit)
+}
+
+async function analyzeLarkInboxMessage(request = {}) {
+  const messageId = String(request.messageId || request.message_id || '').trim()
+  if (!messageId) return { ok: false, error: 'missing-message-id' }
+  if (!larkInbox) startLarkInbox()
+  const snapshot = larkInbox.getSnapshot()
+  const message = (snapshot.messages || []).find(item => item.messageId === messageId)
+  if (!message) return { ok: false, error: 'message-not-found' }
+  if (larkAssistantPending.has(messageId)) return larkAssistantPending.get(messageId)
+
+  larkAssistantResults.set(messageId, {
+    messageId,
+    status: 'running',
+    error: '',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  })
+  broadcastLarkAssistantState()
+
+  const pending = analyzeLarkMessage({
+    message,
+    contextMessages: larkMessageContext(snapshot.messages, message),
+  }, {
+    homeDir: app.getPath('home'),
+  }).then((result) => {
+    const record = result?.ok
+      ? {
+          messageId,
+          status: 'done',
+          error: '',
+          traceId: result.traceId || '',
+          analysis: result.analysis,
+          startedAt: larkAssistantResults.get(messageId)?.startedAt || '',
+          updatedAt: new Date().toISOString(),
+        }
+      : {
+          messageId,
+          status: 'failed',
+          error: result?.error || '消息理解失败',
+          startedAt: larkAssistantResults.get(messageId)?.startedAt || '',
+          updatedAt: new Date().toISOString(),
+        }
+    larkAssistantResults.set(messageId, record)
+    return { ok: result?.ok === true, ...record }
+  }).catch((error) => {
+    const record = {
+      messageId,
+      status: 'failed',
+      error: error?.message || String(error),
+      startedAt: larkAssistantResults.get(messageId)?.startedAt || '',
+      updatedAt: new Date().toISOString(),
+    }
+    larkAssistantResults.set(messageId, record)
+    return { ok: false, ...record }
+  }).finally(() => {
+    larkAssistantPending.delete(messageId)
+    broadcastLarkAssistantState()
+  })
+  larkAssistantPending.set(messageId, pending)
+  return pending
+}
+
+function workItemStateFile() {
+  return path.join(app.getPath('userData'), 'kodama-work-items.json')
+}
+
+function broadcastWorkItemState(snapshot) {
+  const state = snapshot || workItemStore?.getState?.() || {
+    ok: true,
+    items: [],
+    count: 0,
+    openCount: 0,
+    runningCount: 0,
+    updatedAt: new Date().toISOString(),
+  }
+  sendToPet('pet:work-items-updated', state)
+  sendToLarkWorkbench('pet:work-items-updated', state)
+  return state
+}
+
+function startWorkItemStore() {
+  if (workItemStore) return workItemStore
+  workItemStore = createWorkItemStore({
+    file: workItemStateFile(),
+    onUpdate: broadcastWorkItemState,
+  })
+  return workItemStore
+}
+
+function createWorkItemFromAssistant(request = {}) {
+  const messageId = String(request.messageId || request.message_id || '').trim()
+  const kind = request.kind === 'risk' ? 'risk' : 'todo'
+  const index = Number(request.index)
+  if (!messageId || !Number.isInteger(index) || index < 0 || index > 50) {
+    return { ok: false, error: 'invalid-assistant-item' }
+  }
+  const record = larkAssistantResults.get(messageId)
+  if (record?.status !== 'done' || !record.analysis) {
+    return { ok: false, error: 'assistant-analysis-not-ready' }
+  }
+  const source = kind === 'risk'
+    ? record.analysis.risks?.[index]
+    : record.analysis.todos?.[index]
+  const title = kind === 'risk' ? String(source || '').trim() : String(source?.title || '').trim()
+  if (!title) return { ok: false, error: 'assistant-item-not-found' }
+  if (!larkInbox) startLarkInbox()
+  const message = (larkInbox.getSnapshot().messages || []).find(item => item.messageId === messageId)
+  if (!message) return { ok: false, error: 'message-not-found' }
+  const sourceUrl = larkChatUrls(message.chatId, message.messageId)[0] || ''
+  return startWorkItemStore().create({
+    title,
+    description: [
+      kind === 'risk' ? 'Agent 从消息中识别出的风险点。' : 'Agent 从消息中识别出的待办。',
+      record.analysis.summary ? `消息总结：${record.analysis.summary}` : '',
+      record.analysis.intent ? `对方意图：${record.analysis.intent}` : '',
+      message.content ? `原消息：${message.content}` : '',
+    ].filter(Boolean).join('\n\n'),
+    kind,
+    priority: kind === 'risk' ? 'high' : source?.priority,
+    dueAt: kind === 'todo' ? source?.dueAt : '',
+    sourceKey: `${messageId}:${kind}:${index}`,
+    messageId,
+    chatId: message.chatId,
+    chatName: message.chatName,
+    sourceUrl,
+  })
+}
+
+async function runWorkItemAgent(request = {}) {
+  const id = String(request.id || '').trim()
+  const mode = normalizeMode(request.mode)
+  if (!id) return { ok: false, error: 'missing-work-item-id' }
+  const store = startWorkItemStore()
+  const item = store.find(id)
+  if (!item) return { ok: false, error: 'work-item-not-found' }
+  if (workItemAgentPending.has(id)) return workItemAgentPending.get(id)
+
+  const startedAt = new Date().toISOString()
+  store.patch(id, {
+    status: mode === 'execute' ? 'running' : item.status,
+    agent: {
+      mode,
+      status: 'running',
+      error: '',
+      startedAt,
+      updatedAt: startedAt,
+    },
+  })
+
+  const pending = runCodexTask({
+    prompt: buildWorkItemAgentPrompt(item, mode),
+    source: `kodama-work-item-${mode}`,
+    contextKey: `kodama:work-item:${id}`,
+  }, {
+    homeDir: app.getPath('home'),
+  }).then(async (result) => {
+    if (!result?.ok) {
+      const failed = store.patch(id, {
+        status: mode === 'execute' ? 'failed' : item.status,
+        agent: {
+          mode,
+          status: 'failed',
+          error: result?.error || 'Agent 调度失败',
+          updatedAt: new Date().toISOString(),
+        },
+      })
+      return { ok: false, error: result?.error || 'Agent 调度失败', item: failed.item }
+    }
+
+    const parsed = parseWorkItemAgentResult(result.answer, mode)
+    const agent = {
+      mode,
+      status: parsed.outcome,
+      error: '',
+      result: parsed,
+      traceId: result.traceId || '',
+      sessionId: result.sessionId || '',
+      taskId: result.taskId || '',
+      tokens: result.tokens || 0,
+      startedAt,
+      updatedAt: new Date().toISOString(),
+    }
+    if (mode === 'execute' && parsed.outcome === 'completed') {
+      const completed = await store.setCompleted(id, true)
+      const finalItem = completed.ok
+        ? store.patch(id, { agent }).item
+        : store.patch(id, {
+            status: 'done',
+            agent: { ...agent, syncError: completed.error || '飞书任务状态同步失败' },
+          }).item
+      return { ok: true, result: parsed, item: finalItem }
+    }
+
+    const status = mode === 'execute' && parsed.outcome === 'failed'
+      ? 'failed'
+      : mode === 'execute'
+        ? 'open'
+        : item.status
+    const updated = store.patch(id, { status, agent })
+    return { ok: true, result: parsed, item: updated.item }
+  }).catch((error) => {
+    const failed = store.patch(id, {
+      status: mode === 'execute' ? 'failed' : item.status,
+      agent: {
+        mode,
+        status: 'failed',
+        error: error?.message || String(error),
+        updatedAt: new Date().toISOString(),
+      },
+    })
+    return { ok: false, error: error?.message || String(error), item: failed.item }
+  }).finally(() => {
+    workItemAgentPending.delete(id)
+  })
+  workItemAgentPending.set(id, pending)
+  return pending
+}
+
+function knowledgeHubStateFile() {
+  return path.join(app.getPath('userData'), 'kodama-knowledge-hub.json')
+}
+
+function broadcastKnowledgeState(snapshot) {
+  const state = snapshot || knowledgeHub?.getState?.() || {
+    ok: true,
+    items: [],
+    count: 0,
+    summarizedCount: 0,
+    ideaCount: 0,
+    updatedAt: new Date().toISOString(),
+  }
+  sendToPet('pet:knowledge-updated', state)
+  sendToLarkWorkbench('pet:knowledge-updated', state)
+  return state
+}
+
+function startKnowledgeHub() {
+  if (knowledgeHub) return knowledgeHub
+  knowledgeHub = createKnowledgeHub({
+    file: knowledgeHubStateFile(),
+    onUpdate: broadcastKnowledgeState,
+  })
+  return knowledgeHub
+}
+
+async function searchKnowledge(request = {}) {
+  try {
+    return await startKnowledgeHub().search(request.source, request.query)
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error), results: [] }
+  }
+}
+
+async function summarizeKnowledgeItem(request = {}) {
+  const id = String(request.id || '').trim()
+  if (!id) return { ok: false, error: 'missing-knowledge-item-id' }
+  const hub = startKnowledgeHub()
+  const item = hub.find(id)
+  if (!item) return { ok: false, error: 'knowledge-item-not-found' }
+  if (knowledgeAgentPending.has(id)) return knowledgeAgentPending.get(id)
+
+  const startedAt = new Date().toISOString()
+  hub.patch(id, {
+    agent: {
+      status: 'running',
+      error: '',
+      startedAt,
+      updatedAt: startedAt,
+    },
+  })
+  const pending = runCodexTask({
+    prompt: buildKnowledgeSummaryPrompt(item),
+    source: 'kodama-knowledge-summary',
+    contextKey: `kodama:knowledge:${id}`,
+  }, {
+    homeDir: app.getPath('home'),
+  }).then((result) => {
+    if (!result?.ok) {
+      const failed = hub.patch(id, {
+        agent: {
+          status: 'failed',
+          error: result?.error || '知识总结失败',
+          updatedAt: new Date().toISOString(),
+        },
+      })
+      return { ok: false, error: result?.error || '知识总结失败', item: failed.item }
+    }
+    const summary = parseKnowledgeSummary(result.answer)
+    const updated = hub.patch(id, {
+      summary,
+      tags: summary.tags,
+      agent: {
+        status: 'done',
+        error: '',
+        traceId: result.traceId || '',
+        sessionId: result.sessionId || '',
+        taskId: result.taskId || '',
+        tokens: result.tokens || 0,
+        startedAt,
+        updatedAt: new Date().toISOString(),
+      },
+    })
+    return { ok: true, summary, item: updated.item }
+  }).catch((error) => {
+    const failed = hub.patch(id, {
+      agent: {
+        status: 'failed',
+        error: error?.message || String(error),
+        updatedAt: new Date().toISOString(),
+      },
+    })
+    return { ok: false, error: error?.message || String(error), item: failed.item }
+  }).finally(() => {
+    knowledgeAgentPending.delete(id)
+  })
+  knowledgeAgentPending.set(id, pending)
+  return pending
 }
 
 function combinedWorkAreaBounds(displays = screen.getAllDisplays()) {
@@ -346,6 +714,91 @@ function createBridgeTasksWindow() {
     taskWin = null
   })
   return taskWin
+}
+
+function createLarkWorkbenchWindow() {
+  function showLarkWorkbenchWindow() {
+    if (!larkWorkbenchWin || larkWorkbenchWin.isDestroyed()) return
+    try {
+      app.focus({ steal: true })
+      larkWorkbenchWin.show()
+      larkWorkbenchWin.focus()
+      larkWorkbenchWin.moveTop?.()
+      larkWorkbenchWin.setAlwaysOnTop(true, 'floating')
+      setTimeout(() => {
+        if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
+          larkWorkbenchWin.setAlwaysOnTop(false)
+        }
+      }, 1200).unref?.()
+      larkWorkbenchStatus = { phase: 'visible', error: '', updatedAt: new Date().toISOString() }
+    } catch (err) {
+      larkWorkbenchStatus = { phase: 'show-failed', error: err.message, updatedAt: new Date().toISOString() }
+      console.error(`[kodama] show Lark workbench failed: ${err.message}`)
+    }
+  }
+
+  if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
+    showLarkWorkbenchWindow()
+    return larkWorkbenchWin
+  }
+
+  larkWorkbenchWin = new BrowserWindow({
+    width: 1180,
+    height: 800,
+    minWidth: 880,
+    minHeight: 600,
+    title: 'Kodama 工作台',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  larkWorkbenchStatus = { phase: 'created', error: '', updatedAt: new Date().toISOString() }
+  larkWorkbenchWin.loadFile(path.join(__dirname, '../renderer/lark-workbench.html'))
+    .catch((error) => {
+      larkWorkbenchStatus = { phase: 'load-failed', error: error.message, updatedAt: new Date().toISOString() }
+      console.error(`[kodama] load Lark workbench failed: ${error.message}`)
+    })
+  larkWorkbenchWin.once('ready-to-show', () => {
+    larkWorkbenchStatus = { phase: 'ready-to-show', error: '', updatedAt: new Date().toISOString() }
+    showLarkWorkbenchWindow()
+  })
+  larkWorkbenchWin.webContents.once('did-finish-load', () => {
+    larkWorkbenchStatus = { phase: 'loaded', error: '', updatedAt: new Date().toISOString() }
+    showLarkWorkbenchWindow()
+    sendToLarkWorkbench('pet:lark-inbox-updated', larkInbox?.getSnapshot?.() || {})
+    sendToLarkWorkbench('pet:lark-assistant-updated', larkAssistantState())
+    sendToLarkWorkbench('pet:work-items-updated', startWorkItemStore().getState())
+    sendToLarkWorkbench('pet:knowledge-updated', startKnowledgeHub().getState())
+  })
+  larkWorkbenchWin.webContents.on('did-fail-load', (_event, code, description) => {
+    larkWorkbenchStatus = {
+      phase: 'load-failed',
+      error: `${code}: ${description}`,
+      updatedAt: new Date().toISOString(),
+    }
+  })
+  larkWorkbenchWin.webContents.on('render-process-gone', (_event, details) => {
+    larkWorkbenchStatus = {
+      phase: 'renderer-gone',
+      error: details?.reason || 'renderer process gone',
+      updatedAt: new Date().toISOString(),
+    }
+  })
+  setTimeout(showLarkWorkbenchWindow, 800).unref?.()
+  larkWorkbenchWin.on('show', () => {
+    larkWorkbenchStatus = { phase: 'visible', error: '', updatedAt: new Date().toISOString() }
+  })
+  larkWorkbenchWin.on('hide', () => {
+    larkWorkbenchStatus = { phase: 'hidden', error: '', updatedAt: new Date().toISOString() }
+  })
+  larkWorkbenchWin.on('closed', () => {
+    larkWorkbenchStatus = { phase: 'closed', error: '', updatedAt: new Date().toISOString() }
+    larkWorkbenchWin = null
+  })
+  return larkWorkbenchWin
 }
 
 // A real, roomy settings/management window (the right-click overlay panel is
@@ -1635,11 +2088,13 @@ async function openExternalTarget(url) {
   const shouldUseLark = ['lark:', 'feishu:'].includes(parsed.protocol) || /(^|\.)applink\.(feishu\.cn|larksuite\.com)$/i.test(parsed.hostname)
   const shouldUseCodex = parsed.protocol === 'codex:'
   if (shouldUseCodex && process.platform === 'darwin' && appExists('Codex')) {
-    if (await openUrlWithApp('Codex', url)) return { ok: true, method: 'open -a Codex' }
+    if (await openUrlWithApp('Codex', url)) return { ok: true, method: 'open -a Codex', appName: 'Codex' }
   }
   if (shouldUseLark && process.platform === 'darwin') {
     for (const appName of ['Lark', 'Feishu', '飞书']) {
-      if (appExists(appName) && await openUrlWithApp(appName, url)) return { ok: true, method: `open -a ${appName}` }
+      if (appExists(appName) && await openUrlWithApp(appName, url)) {
+        return { ok: true, method: `open -a ${appName}`, appName }
+      }
     }
   }
   await shell.openExternal(url)
@@ -1683,13 +2138,55 @@ async function openTargetPayload(target) {
     try {
       const result = await openExternalTarget(url)
       lastOpenedTarget = { url, method: result.method, at: new Date().toISOString(), target }
-      return { ok: true, url, method: result.method }
+      return { ok: true, url, method: result.method, appName: result.appName || '' }
     } catch (err) {
       lastError = String(err?.message || err)
     }
   }
   clipboard.writeText(urls[0])
   return { ok: false, error: lastError || 'open-target-failed', copiedUrl: urls[0] }
+}
+
+async function applyLarkDraft(request = {}) {
+  const messageId = String(request.messageId || request.message_id || '').trim()
+  const draft = String(request.draft || request.text || '').trim().slice(0, 8000)
+  if (!messageId) return { ok: false, error: 'missing-message-id' }
+  if (!draft) return { ok: false, error: 'missing-draft' }
+  if (!larkInbox) startLarkInbox()
+  const message = (larkInbox.getSnapshot().messages || []).find(item => item.messageId === messageId)
+  if (!message?.chatId) return { ok: false, error: 'message-not-found' }
+
+  clipboard.writeText(draft)
+  const opened = await openTargetPayload({
+    kind: 'lark',
+    chatId: message.chatId,
+    messageId: message.messageId,
+    label: message.chatName || '飞书消息',
+  })
+  if (!opened.ok) {
+    return { ok: true, copied: true, opened: false, applied: false, error: opened.error || 'open-target-failed' }
+  }
+  if (process.platform !== 'darwin') {
+    return { ok: true, copied: true, opened: true, applied: false, reason: 'paste-automation-unavailable' }
+  }
+
+  const appName = opened.appName || selectLarkAppName(appExists)
+  if (!appName) {
+    return { ok: true, copied: true, opened: true, applied: false, reason: 'lark-app-not-found' }
+  }
+  try {
+    await runCommand('osascript', ['-e', larkPasteScript(appName)], { timeout: 6000 })
+    return { ok: true, copied: true, opened: true, applied: true, appName }
+  } catch (error) {
+    return {
+      ok: true,
+      copied: true,
+      opened: true,
+      applied: false,
+      appName,
+      error: error?.message || String(error),
+    }
+  }
 }
 
 ipcMain.handle('pet:open-target', async (_e, target) => {
@@ -1875,6 +2372,83 @@ ipcMain.handle('pet:lark-inbox', () => {
 ipcMain.handle('pet:lark-inbox-refresh', async () => {
   if (!larkInbox) startLarkInbox()
   return larkInbox.refresh({ reason: 'manual' })
+})
+
+ipcMain.handle('pet:open-lark-workbench', () => {
+  if (!larkInbox) startLarkInbox()
+  createLarkWorkbenchWindow()
+  return { ok: true }
+})
+
+ipcMain.handle('pet:lark-assistant-state', () => {
+  return larkAssistantState()
+})
+
+ipcMain.handle('pet:lark-assistant-analyze', async (_e, request) => {
+  return analyzeLarkInboxMessage(request)
+})
+
+ipcMain.handle('pet:work-items-state', () => {
+  return startWorkItemStore().getState()
+})
+
+ipcMain.handle('pet:work-item-create-from-assistant', (_e, request) => {
+  return createWorkItemFromAssistant(request)
+})
+
+ipcMain.handle('pet:work-item-create-lark', async (_e, request) => {
+  return startWorkItemStore().createLarkTask(String(request?.id || ''))
+})
+
+ipcMain.handle('pet:work-items-sync', async (_e, request) => {
+  const id = String(request?.id || '').trim()
+  return id
+    ? startWorkItemStore().syncLarkTask(id)
+    : startWorkItemStore().syncAll()
+})
+
+ipcMain.handle('pet:work-item-complete', async (_e, request) => {
+  return startWorkItemStore().setCompleted(String(request?.id || ''), request?.completed !== false)
+})
+
+ipcMain.handle('pet:work-item-priority', (_e, request) => {
+  return startWorkItemStore().patch(String(request?.id || ''), { priority: request?.priority })
+})
+
+ipcMain.handle('pet:work-item-agent', async (_e, request) => {
+  return runWorkItemAgent(request)
+})
+
+ipcMain.handle('pet:knowledge-state', () => {
+  return startKnowledgeHub().getState()
+})
+
+ipcMain.handle('pet:knowledge-search', async (_e, request) => {
+  return searchKnowledge(request)
+})
+
+ipcMain.handle('pet:knowledge-save-result', (_e, request) => {
+  return startKnowledgeHub().saveSearchResult(String(request?.key || ''))
+})
+
+ipcMain.handle('pet:knowledge-capture-idea', (_e, request) => {
+  return startKnowledgeHub().captureIdea(request?.text)
+})
+
+ipcMain.handle('pet:knowledge-capture-clipboard', async () => {
+  try {
+    return await startKnowledgeHub().captureClipboard(clipboard.readText())
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) }
+  }
+})
+
+ipcMain.handle('pet:knowledge-summarize', async (_e, request) => {
+  return summarizeKnowledgeItem(request)
+})
+
+ipcMain.handle('pet:lark-draft-apply', async (_e, request) => {
+  return applyLarkDraft(request)
 })
 
 ipcMain.handle('pet:lark-base-sink', () => {
@@ -2491,6 +3065,9 @@ function controlPet(action) {
     showPetAndResetPosition()
   } else if (action === 'bridge-tasks') {
     createBridgeTasksWindow()
+  } else if (action === 'lark-workbench') {
+    if (!larkInbox) startLarkInbox()
+    createLarkWorkbenchWindow()
   } else if (action === 'manage') {
     openManageWindow()
   } else {
@@ -2543,6 +3120,12 @@ function startLocalAgentServer() {
         larkArchive: larkArchive?.getSummary?.() || null,
         larkBaseSink: larkBaseSink?.getSummary?.() || null,
         larkWebPush: larkWebPush?.getStatus?.() || null,
+        larkAssistant: {
+          resultCount: larkAssistantResults.size,
+          pendingCount: larkAssistantPending.size,
+          workbenchVisible: Boolean(larkWorkbenchWin && !larkWorkbenchWin.isDestroyed() && larkWorkbenchWin.isVisible()),
+          workbenchStatus: larkWorkbenchStatus,
+        },
         loginItemEnabled: isLoginItemEnabled(),
       })
       return
@@ -2617,7 +3200,7 @@ function startLocalAgentServer() {
       writeJson(res, 200, larkWebPush.reload({ show: true }))
       return
     }
-    const controlMatch = url.pathname.match(/^\/pet\/(show|hide|toggle|panel|reset-position|bridge-tasks|manage)$/)
+    const controlMatch = url.pathname.match(/^\/pet\/(show|hide|toggle|panel|reset-position|bridge-tasks|lark-workbench|manage)$/)
     if (controlMatch && (req.method === 'GET' || req.method === 'POST')) {
       if (isCrossSiteBrowserRequest(req)) {
         res.writeHead(403)
@@ -2965,6 +3548,8 @@ app.whenReady().then(() => {
   startLarkBaseSink()
   startLarkInbox()
   startLarkWebPush()
+  startWorkItemStore()
+  startKnowledgeHub()
   registerGlobalShortcuts()
   refreshTokenStats({ force: true })
   topmostInterval = setInterval(reassertTopmost, 15 * 1000)

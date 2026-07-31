@@ -39,6 +39,7 @@ function readOptions(input = {}) {
     commandTimeoutMs: clampInt(input.commandTimeoutMs, 3 * 1000, 60 * 1000, DEFAULT_OPTIONS.commandTimeoutMs),
     maxMessages: clampInt(input.maxMessages, 20, 300, DEFAULT_OPTIONS.maxMessages),
     maxSeen: clampInt(input.maxSeen, 100, 2000, DEFAULT_OPTIONS.maxSeen),
+    currentUserId: String(process.env.KODAMA_LARK_CURRENT_USER_ID || input.currentUserId || '').trim(),
   }
 }
 
@@ -52,7 +53,9 @@ function emptySnapshot(options = DEFAULT_OPTIONS) {
     messages: [],
     chatCount: 0,
     messageCount: 0,
+    attentionCount: 0,
     newCount: 0,
+    currentUserReady: Boolean(options.currentUserId),
     updatedAt: '',
     startedAt: '',
     pollIntervalMs: options.pollIntervalMs,
@@ -62,6 +65,11 @@ function emptySnapshot(options = DEFAULT_OPTIONS) {
 function compactText(value, max = 220) {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
   return text.length > max ? `${text.slice(0, max - 1)}...` : text
+}
+
+function normalizeChatMode(value) {
+  const mode = String(value || '').trim().toLowerCase()
+  return ['p2p', 'group', 'topic'].includes(mode) ? mode : ''
 }
 
 function normalizeFeishuTime(value) {
@@ -89,6 +97,7 @@ function dataPayload(payload) {
 
 function chatItemsFromPayload(payload) {
   const data = dataPayload(payload)
+  if (Array.isArray(data.chats)) return data.chats
   return Array.isArray(data.items) ? data.items : []
 }
 
@@ -101,21 +110,95 @@ function normalizeChat(raw) {
   return {
     chatId: String(raw?.chat_id || raw?.chatId || '').trim(),
     name: compactText(raw?.name || raw?.chat_name || raw?.chatName || '未命名群', 80),
-    mode: String(raw?.chat_mode || raw?.chatMode || '').trim(),
+    mode: normalizeChatMode(raw?.chat_mode || raw?.chatMode || raw?.mode),
     status: String(raw?.chat_status || raw?.chatStatus || '').trim(),
     external: raw?.external === true,
     avatar: String(raw?.avatar || '').trim(),
   }
 }
 
-function normalizeMessage(raw, chat) {
+function normalizeMentions(raw) {
+  const sources = Array.isArray(raw)
+    ? raw
+    : [
+        raw?.mentions,
+        raw?.mention_list,
+        raw?.mentionList,
+        raw?.ats,
+        raw?.at_list,
+        raw?.atList,
+      ].flatMap(value => Array.isArray(value) ? value : value ? [value] : [])
+  const mentions = []
+  const seen = new Set()
+  for (const item of sources) {
+    if (!item || typeof item !== 'object') continue
+    const target = item.user || item.at || item.mention || item
+    const id = String(
+      target.id
+      || target.openId
+      || target.open_id
+      || target.userId
+      || target.user_id
+      || target.unionId
+      || target.union_id
+      || '',
+    ).trim()
+    const name = compactText(target.name || target.displayName || target.display_name || item.name || '', 80)
+    const type = String(target.type || target.userType || target.user_type || item.type || 'user').trim() || 'user'
+    if (!id && !name) continue
+    const key = id || `${type}:${name}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    mentions.push({ id, name, type })
+  }
+  return mentions
+}
+
+function classifyAttentionMessage(message, { currentUserId = '' } = {}) {
+  const selfId = String(currentUserId || '').trim()
+  const senderId = String(message?.senderId || message?.sender_id || '').trim()
+  const mentions = normalizeMentions(message)
+  const mentionsMe = Boolean(selfId && mentions.some(mention => mention.id === selfId))
+  const isOwnMessage = Boolean(selfId && senderId && senderId === selfId)
+  const chatMode = normalizeChatMode(message?.chatMode || message?.chat_mode || message?.mode)
+  const attentionReason = !isOwnMessage && chatMode === 'p2p'
+    ? 'p2p'
+    : !isOwnMessage && mentionsMe
+      ? 'mention'
+      : ''
+  return {
+    mentionsMe,
+    isOwnMessage,
+    needsAttention: Boolean(attentionReason),
+    attentionReason,
+  }
+}
+
+function normalizeAttention(raw, message, currentUserId) {
+  const hasExistingClassification = !currentUserId && [
+    'mentionsMe',
+    'isOwnMessage',
+    'needsAttention',
+    'attentionReason',
+  ].some(key => Object.prototype.hasOwnProperty.call(raw || {}, key))
+  if (!hasExistingClassification) return classifyAttentionMessage(message, { currentUserId })
+  return {
+    mentionsMe: raw.mentionsMe === true,
+    isOwnMessage: raw.isOwnMessage === true,
+    needsAttention: raw.needsAttention === true,
+    attentionReason: String(raw.attentionReason || '').trim(),
+  }
+}
+
+function normalizeMessage(raw, chat, { currentUserId = '' } = {}) {
   const messageId = String(raw?.message_id || raw?.messageId || '').trim()
   const createdAt = normalizeFeishuTime(raw?.create_time || raw?.createTime || raw?.create_at || raw?.createdAt)
   const sender = raw?.sender && typeof raw.sender === 'object' ? raw.sender : {}
-  return {
+  const message = {
     messageId,
     chatId: chat.chatId,
     chatName: chat.name,
+    chatMode: normalizeChatMode(raw?.chat_mode || raw?.chatMode || chat.mode),
     msgType: String(raw?.msg_type || raw?.msgType || raw?.type || '').trim() || 'message',
     content: compactText(raw?.content || raw?.text || raw?.summary || '', 240),
     senderName: compactText(sender.name || raw?.sender_name || raw?.senderName || sender.id || '未知成员', 80),
@@ -126,17 +209,20 @@ function normalizeMessage(raw, chat) {
     updated: raw?.updated === true,
     threadId: String(raw?.thread_id || raw?.threadId || '').trim(),
     source: raw?.source || 'poll',
+    mentions: normalizeMentions(raw),
   }
+  return { ...message, ...normalizeAttention(raw, message, currentUserId) }
 }
 
-function normalizeIncomingMessage(raw) {
+function normalizeIncomingMessage(raw, { currentUserId = '' } = {}) {
   const messageId = String(raw?.messageId || raw?.message_id || '').trim()
   if (!messageId) return null
   const createdAt = normalizeFeishuTime(raw?.createdAt || raw?.createTime || raw?.create_time || new Date().toISOString())
-  return {
+  const message = {
     messageId,
     chatId: String(raw?.chatId || raw?.chat_id || '').trim(),
     chatName: compactText(raw?.chatName || raw?.chat_name || '飞书群聊', 80),
+    chatMode: normalizeChatMode(raw?.chatMode || raw?.chat_mode || raw?.mode),
     msgType: String(raw?.msgType || raw?.msg_type || raw?.type || 'message').trim(),
     content: compactText(raw?.content || raw?.text || raw?.summary || '', 240),
     senderName: compactText(raw?.senderName || raw?.sender_name || raw?.sender?.name || raw?.sender?.id || '未知成员', 80),
@@ -147,7 +233,9 @@ function normalizeIncomingMessage(raw) {
     updated: raw?.updated === true,
     threadId: String(raw?.threadId || raw?.thread_id || '').trim(),
     source: String(raw?.source || 'push').trim(),
+    mentions: normalizeMentions(raw),
   }
+  return { ...message, ...normalizeAttention(raw, message, currentUserId) }
 }
 
 function mergeMessages(...lists) {
@@ -157,7 +245,15 @@ function mergeMessages(...lists) {
       const message = normalizeIncomingMessage(raw)
       if (!message || message.deleted) continue
       const prev = byId.get(message.messageId)
-      byId.set(message.messageId, prev ? { ...prev, ...message, content: message.content || prev.content } : message)
+      byId.set(message.messageId, prev
+        ? {
+            ...prev,
+            ...message,
+            chatMode: message.chatMode || prev.chatMode,
+            content: message.content || prev.content,
+            mentions: message.mentions.length ? message.mentions : prev.mentions,
+          }
+        : message)
     }
   }
   return Array.from(byId.values()).sort((a, b) => timeValue(b.createdAt) - timeValue(a.createdAt))
@@ -168,18 +264,27 @@ function rebuildChats(baseChats, messages, perChatLimit) {
   for (const raw of Array.isArray(baseChats) ? baseChats : []) {
     const chat = normalizeChat(raw)
     if (!chat.chatId) continue
-    byId.set(chat.chatId, { ...raw, ...chat, messages: [] })
+    const previous = byId.get(chat.chatId)
+    byId.set(chat.chatId, {
+      ...previous,
+      ...raw,
+      ...chat,
+      name: chat.name === '未命名群' && previous?.name ? previous.name : chat.name,
+      mode: chat.mode || previous?.mode || '',
+      messages: [],
+    })
   }
   for (const message of Array.isArray(messages) ? messages : []) {
     if (!message.chatId) continue
     const chat = byId.get(message.chatId) || {
       chatId: message.chatId,
       name: message.chatName || '飞书群聊',
-      mode: 'group',
+      mode: message.chatMode || 'group',
       status: '',
       messages: [],
     }
     chat.name = chat.name || message.chatName || '飞书群聊'
+    chat.mode = chat.mode || message.chatMode || 'group'
     chat.messages = mergeMessages([message], chat.messages || []).slice(0, perChatLimit)
     byId.set(message.chatId, chat)
   }
@@ -254,24 +359,36 @@ function trimSeenState(seen, maxSeen) {
   return Object.fromEntries(entries)
 }
 
-async function listRecentChats(options) {
-  const payload = await runJson(options.larkCliBin || 'lark-cli', [
+function listRecentChatArgs(options) {
+  return [
     'im',
-    'chats',
-    'list',
+    '+chat-list',
     '--as',
     'user',
+    '--types',
+    'p2p,group',
+    '--page-size',
+    String(options.chatLimit),
+    '--sort',
+    'active_time',
     '--format',
     'json',
-    '--params',
-    JSON.stringify({
-      page_size: options.chatLimit,
-      sort_type: 'ByActiveTimeDesc',
-    }),
-  ], { timeout: options.commandTimeoutMs })
+  ]
+}
+
+async function listRecentChats(options) {
+  const payload = await runJson(
+    options.larkCliBin || 'lark-cli',
+    listRecentChatArgs(options),
+    { timeout: options.commandTimeoutMs },
+  )
   return chatItemsFromPayload(payload)
     .map(normalizeChat)
-    .filter(chat => chat.chatId && chat.status !== 'dissolved' && (!chat.mode || chat.mode === 'group' || chat.mode === 'topic'))
+    .filter(chat => (
+      chat.chatId
+      && chat.status !== 'dissolved'
+      && (!chat.mode || ['p2p', 'group', 'topic'].includes(chat.mode))
+    ))
     .slice(0, options.chatLimit)
 }
 
@@ -291,8 +408,28 @@ async function listChatMessages(chat, options) {
     'json',
   ], { timeout: options.commandTimeoutMs })
   return messageItemsFromPayload(payload)
-    .map(raw => normalizeMessage(raw, chat))
+    .map(raw => normalizeMessage(raw, chat, { currentUserId: options.currentUserId }))
     .filter(message => message.messageId && !message.deleted)
+}
+
+async function fetchCurrentUserId(options) {
+  if (options.currentUserId) return options.currentUserId
+  const payload = await runJson(options.larkCliBin || 'lark-cli', [
+    'contact',
+    '+get-user',
+    '--as',
+    'user',
+    '--format',
+    'json',
+  ], { timeout: options.commandTimeoutMs })
+  const data = dataPayload(payload)
+  return String(
+    data?.user?.open_id
+    || data?.user?.openId
+    || data?.open_id
+    || data?.openId
+    || '',
+  ).trim()
 }
 
 async function fetchLarkInbox(options) {
@@ -325,9 +462,26 @@ function createLarkInbox(input = {}) {
   const options = readOptions(input)
   let snapshot = emptySnapshot(options)
   let state = readSeenState(options.stateFile || path.join(process.cwd(), 'kodama-lark-inbox-state.json'))
+  let currentUserId = options.currentUserId
+  let currentUserLookup = null
   let timer = null
   let inFlight = null
   let started = false
+
+  async function ensureCurrentUserId() {
+    if (currentUserId) return currentUserId
+    if (currentUserLookup) return currentUserLookup
+    currentUserLookup = fetchCurrentUserId(options)
+      .then((value) => {
+        currentUserId = value
+        return value
+      })
+      .catch(() => '')
+      .finally(() => {
+        currentUserLookup = null
+      })
+    return currentUserLookup
+  }
 
   function persistSeen() {
     if (!options.stateFile) return
@@ -353,7 +507,8 @@ function createLarkInbox(input = {}) {
     if (inFlight) return inFlight
     const startedAt = new Date().toISOString()
     updateSnapshot({ loading: true, startedAt, error: '' }, { reason, phase: 'start' })
-    inFlight = fetchLarkInbox(options)
+    inFlight = ensureCurrentUserId()
+      .then(() => fetchLarkInbox({ ...options, currentUserId }))
       .then((result) => {
         const now = new Date().toISOString()
         const seen = state.seen || {}
@@ -363,7 +518,9 @@ function createLarkInbox(input = {}) {
         for (const message of result.messages) seen[message.messageId] = message.createdAt || now
         state = { version: 1, seen, updatedAt: now }
         persistSeen()
-        const messages = mergeMessages(result.messages, snapshot.messages).slice(0, options.maxMessages)
+        const messages = mergeMessages(result.messages, snapshot.messages)
+          .map(message => normalizeIncomingMessage(message, { currentUserId }))
+          .slice(0, options.maxMessages)
         const chats = rebuildChats(result.chats, messages, options.perChatLimit)
         return updateSnapshot({
           ok: result.errors.length === 0,
@@ -373,7 +530,9 @@ function createLarkInbox(input = {}) {
           messages,
           chatCount: chats.length,
           messageCount: messages.length,
+          attentionCount: messages.filter(message => message.needsAttention).length,
           newCount: newMessages.length,
+          currentUserReady: Boolean(currentUserId),
           updatedAt: now,
           errors: result.errors,
         }, { reason, phase: 'done', newMessages })
@@ -394,7 +553,9 @@ function createLarkInbox(input = {}) {
 
   function ingestMessages(rawMessages, meta = {}) {
     if (options.enabled === false) return snapshot
-    const incoming = mergeMessages(rawMessages).slice(0, options.maxMessages)
+    const incoming = mergeMessages(rawMessages)
+      .map(message => normalizeIncomingMessage(message, { currentUserId }))
+      .slice(0, options.maxMessages)
     if (!incoming.length) return snapshot
     const now = new Date().toISOString()
     const seen = state.seen || {}
@@ -402,7 +563,9 @@ function createLarkInbox(input = {}) {
     for (const message of incoming) seen[message.messageId] = message.createdAt || now
     state = { version: 1, seen, updatedAt: now }
     persistSeen()
-    const messages = mergeMessages(incoming, snapshot.messages).slice(0, options.maxMessages)
+    const messages = mergeMessages(incoming, snapshot.messages)
+      .map(message => normalizeIncomingMessage(message, { currentUserId }))
+      .slice(0, options.maxMessages)
     const chats = rebuildChats([...(snapshot.chats || []), ...(meta.chats || [])], messages, options.perChatLimit)
     return updateSnapshot({
       ok: true,
@@ -412,7 +575,9 @@ function createLarkInbox(input = {}) {
       messages,
       chatCount: chats.length,
       messageCount: messages.length,
+      attentionCount: messages.filter(message => message.needsAttention).length,
       newCount: newMessages.length,
+      currentUserReady: Boolean(currentUserId),
       updatedAt: now,
     }, { reason: meta.reason || meta.source || 'push', phase: 'push', newMessages })
   }
@@ -443,7 +608,9 @@ function createLarkInbox(input = {}) {
       error: snapshot.error,
       chatCount: snapshot.chatCount,
       messageCount: snapshot.messageCount,
+      attentionCount: snapshot.attentionCount,
       newCount: snapshot.newCount,
+      currentUserReady: snapshot.currentUserReady,
       updatedAt: snapshot.updatedAt,
       pollIntervalMs: snapshot.pollIntervalMs,
     }
@@ -459,11 +626,16 @@ module.exports = {
   dataPayload,
   emptySnapshot,
   fetchLarkInbox,
+  fetchCurrentUserId,
+  classifyAttentionMessage,
+  listRecentChatArgs,
   messageItemsFromPayload,
   mergeMessages,
   normalizeChat,
+  normalizeChatMode,
   normalizeFeishuTime,
   normalizeIncomingMessage,
+  normalizeMentions,
   normalizeMessage,
   rebuildChats,
   readOptions,

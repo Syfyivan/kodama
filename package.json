@@ -14,6 +14,7 @@
     "panel": "node scripts/kodama-control.mjs panel",
     "reset-position": "node scripts/kodama-control.mjs reset-position",
     "bridge-tasks": "node scripts/kodama-control.mjs bridge-tasks",
+    "workbench": "node scripts/kodama-control.mjs lark-workbench",
     "healthz": "node scripts/kodama-control.mjs healthz",
     "tokens": "node scripts/kodama-control.mjs tokens",
     "token:test": "node scripts/kodama-control.mjs token-test 1234",

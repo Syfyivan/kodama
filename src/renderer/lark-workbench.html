@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:*;" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kodama 工作台</title>
+    <link rel="stylesheet" href="./lark-workbench.css" />
+  </head>
+  <body>
+    <header class="workbench-header">
+      <div>
+        <p class="eyebrow">KODAMA WORKBENCH</p>
+        <h1>飞书消息工作台</h1>
+        <p id="workbench-status" class="workbench-status">正在读取消息…</p>
+      </div>
+      <div class="header-actions">
+        <label class="attention-filter">
+          <input id="attention-only" type="checkbox" checked />
+          <span>只看私聊 / @我</span>
+        </label>
+        <button id="toggle-work-items" class="secondary" type="button">工作项 0</button>
+        <button id="toggle-knowledge" class="secondary" type="button">知识库 0</button>
+        <button id="refresh-inbox" class="secondary" type="button">刷新消息</button>
+      </div>
+    </header>
+
+    <main class="workbench-shell">
+      <aside class="message-sidebar" aria-label="飞书消息">
+        <div class="sidebar-tools">
+          <input id="message-search" type="search" placeholder="搜索会话、发送人或内容" />
+          <span id="message-count">0 条</span>
+        </div>
+        <div id="message-list" class="message-list empty">暂无需处理消息</div>
+      </aside>
+
+      <section id="message-detail" class="message-detail empty">
+        <div class="empty-state">
+          <strong>选择一条消息</strong>
+          <p>私聊和 @ 你的消息会优先显示在左侧。</p>
+        </div>
+      </section>
+    </main>
+
+    <aside id="work-item-drawer" class="work-item-drawer" hidden aria-label="工作项">
+      <div class="work-item-drawer-head">
+        <div>
+          <p class="eyebrow">TASKS + AGENT</p>
+          <h2>工作项</h2>
+          <p id="work-item-status">0 个进行中</p>
+        </div>
+        <div class="work-item-drawer-actions">
+          <button id="sync-work-items" class="secondary" type="button">同步飞书任务</button>
+          <button id="close-work-items" class="quiet" type="button" aria-label="关闭工作项">关闭</button>
+        </div>
+      </div>
+      <div id="work-item-list" class="work-item-list empty">暂无工作项</div>
+    </aside>
+
+    <aside id="knowledge-drawer" class="knowledge-drawer" hidden aria-label="个人知识库">
+      <div class="knowledge-drawer-head">
+        <div>
+          <p class="eyebrow">READING + IDEAS</p>
+          <h2>个人知识库</h2>
+          <p id="knowledge-status">0 条内容</p>
+        </div>
+        <button id="close-knowledge" class="quiet" type="button" aria-label="关闭知识库">关闭</button>
+      </div>
+
+      <div class="knowledge-tools">
+        <section class="idea-capture">
+          <textarea id="idea-input" aria-label="记录想法" placeholder="记下一个想法、判断或待继续探索的问题…"></textarea>
+          <div>
+            <button id="save-idea" class="primary" type="button">保存想法</button>
+            <button id="capture-clipboard" class="secondary" type="button">收集剪贴板</button>
+            <button id="open-x-feed" class="secondary" type="button">打开 X</button>
+          </div>
+        </section>
+
+        <section class="knowledge-search">
+          <input id="knowledge-query" type="search" placeholder="输入关注主题；GitHub 留空看近 7 天新项目" />
+          <div>
+            <button type="button" data-knowledge-source="bytetech">ByteTech</button>
+            <button type="button" data-knowledge-source="github">GitHub 热门</button>
+            <button type="button" data-knowledge-source="lark">飞书文档</button>
+          </div>
+        </section>
+
+        <section id="knowledge-results-section" class="knowledge-results-section" hidden>
+          <div class="knowledge-section-head">
+            <h3>搜索结果</h3>
+            <span id="knowledge-result-meta"></span>
+          </div>
+          <div id="knowledge-results" class="knowledge-results"></div>
+        </section>
+      </div>
+
+      <div class="knowledge-library">
+        <div class="knowledge-section-head">
+          <h3>已沉淀</h3>
+          <span id="knowledge-library-count">0 条</span>
+        </div>
+        <div id="knowledge-list" class="knowledge-list empty">还没有内容</div>
+      </div>
+    </aside>
+
+    <div id="workbench-toast" class="toast" hidden></div>
+    <script src="./lark-workbench.js"></script>
+  </body>
+</html>

@@ -1,4 +1,5 @@
 const path = require('path')
+const { normalizeChatMode, normalizeMentions } = require('./lark-inbox')
 
 const DEFAULT_WEB_PUSH_OPTIONS = Object.freeze({
   enabled: true,
@@ -125,6 +126,23 @@ function extractRichText(content) {
   return compactText(ids.map(id => richTextElementText(elements[id])).join(''), 240)
 }
 
+function extractRichTextMentions(content) {
+  const richText = content?.richText || content?.rich_text || content?.richtext
+  if (!richText || typeof richText !== 'object') return []
+  const elements = richText.elements && typeof richText.elements === 'object' ? richText.elements : {}
+  const ids = Array.isArray(richText.elementIds)
+    ? richText.elementIds
+    : Array.isArray(richText.element_ids)
+      ? richText.element_ids
+      : Object.keys(elements)
+  const mentions = ids.flatMap((id) => {
+    const property = elements[id]?.property || elements[id]?.properties || {}
+    const target = property.at || property.mention
+    return target && typeof target === 'object' ? [target] : []
+  })
+  return normalizeMentions(mentions)
+}
+
 function webMessageTypeName(type) {
   const value = Number(type)
   if (value === 4) return 'text'
@@ -152,7 +170,7 @@ function normalizeWebChat(raw, fallbackId = '') {
   return {
     chatId,
     name: compactText(firstString(raw?.name, raw?.chatName, raw?.chat_name, raw?.topicName, '未命名群'), 80),
-    mode: firstString(raw?.chatMode, raw?.chat_mode, raw?.type),
+    mode: normalizeChatMode(firstString(raw?.chatMode, raw?.chat_mode, raw?.type)),
     status: firstString(raw?.chatStatus, raw?.chat_status),
     source: 'web-push',
   }
@@ -169,10 +187,16 @@ function normalizeWebMessage(raw, chat, users = {}) {
   )
   const sender = senderId && users[senderId] && typeof users[senderId] === 'object' ? users[senderId] : {}
   const createdAt = normalizeCreateTime(firstString(raw?.createTime, raw?.create_time, raw?.createdAt, raw?.create_at))
+  const content = safeJson(raw?.content)
+  const mentions = normalizeMentions([
+    ...normalizeMentions(raw),
+    ...extractRichTextMentions(content),
+  ])
   return {
     messageId: firstString(raw?.id, raw?.messageId, raw?.message_id),
     chatId: chat.chatId,
     chatName: chat.name,
+    chatMode: chat.mode,
     msgType: webMessageTypeName(raw?.type),
     content: contentText(raw),
     senderName: compactText(firstString(sender.name, sender.localizedName, raw?.senderName, raw?.sender_name, senderId, '未知成员'), 80),
@@ -181,6 +205,7 @@ function normalizeWebMessage(raw, chat, users = {}) {
     createTime: firstString(raw?.createTime, raw?.create_time),
     threadId: firstString(raw?.threadId, raw?.thread_id),
     source: 'web-push',
+    mentions,
   }
 }
 
@@ -448,6 +473,7 @@ module.exports = {
   contentText,
   createLarkWebPush,
   emptyWebPushStatus,
+  extractRichTextMentions,
   injectClientChannelPush,
   normalizeCreateTime,
   normalizeWebChat,

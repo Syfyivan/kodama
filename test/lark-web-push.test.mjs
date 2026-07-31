@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url)
 const {
   injectClientChannelPush,
   normalizeCreateTime,
+  normalizeWebChat,
   parseLarkWebPushPayload,
 } = require('../src/main/lark-web-push.js')
 
@@ -48,6 +49,49 @@ test('lark web push parses Feishu channel push messages', () => {
   assert.equal(result.messages[0].msgType, 'text')
   assert.equal(result.messages[0].content, 'hello world')
   assert.equal(result.messages[0].source, 'web-push')
+})
+
+test('lark web push preserves chat mode and structured rich-text mentions', () => {
+  const result = parseLarkWebPushPayload({
+    command: 5065,
+    payload: {
+      entity: {
+        chats: {
+          oc_demo: { id: 'oc_demo', name: '工程群', chatMode: 'group' },
+        },
+        users: {
+          ou_sender: { name: '一凡' },
+        },
+        messages: {
+          om_demo: {
+            id: 'om_demo',
+            chatId: 'oc_demo',
+            senderId: 'ou_sender',
+            type: 4,
+            createTime: '1783400820',
+            content: {
+              richText: {
+                elementIds: ['e1', 'e2'],
+                elements: {
+                  e1: { property: { at: { openId: 'ou_me', name: '宋一凡' } } },
+                  e2: { property: { text: { content: ' 看一下' } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  })
+  assert.equal(result.messages[0].chatMode, 'group')
+  assert.deepEqual(result.messages[0].mentions, [
+    { id: 'ou_me', name: '宋一凡', type: 'user' },
+  ])
+  assert.equal(result.messages[0].content, '宋一凡 看一下')
+})
+
+test('lark web push does not mistake numeric chat type for chat mode', () => {
+  assert.equal(normalizeWebChat({ id: 'oc_demo', type: 3 }).mode, '')
 })
 
 test('lark web push parses image messages compactly', () => {
