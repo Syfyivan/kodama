@@ -56,7 +56,13 @@ const LOCAL_AGENT_PORT = 7766
 
 let win
 let larkWorkbenchWin
-let pendingWorkbenchNavigation = { tab: 'messages', taskId: '' }
+let pendingWorkbenchNavigation = {
+  tab: 'messages',
+  taskId: '',
+  action: '',
+  sessionKey: '',
+  initialTitle: '',
+}
 let lastUiSettings = null
 let tray
 let pomodoro = null
@@ -152,14 +158,27 @@ function normalizeWorkbenchNavigation(request = {}) {
     'settings',
   ])
   const tab = allowedTabs.has(request?.tab) ? request.tab : 'messages'
+  const action = tab === 'tasks' && request?.action === 'create-task' ? 'create-task' : ''
   return {
     tab,
     taskId: tab === 'tasks' ? String(request?.taskId || '').trim() : '',
+    action,
+    sessionKey: action ? String(request?.sessionKey || '').trim().slice(0, 500) : '',
+    initialTitle: action ? String(request?.initialTitle || '').trim().slice(0, 120) : '',
   }
 }
 
 function sendWorkbenchNavigation() {
-  sendToLarkWorkbench('pet:workbench-navigate', pendingWorkbenchNavigation)
+  const navigation = pendingWorkbenchNavigation
+  sendToLarkWorkbench('pet:workbench-navigate', navigation)
+  if (navigation.action) {
+    pendingWorkbenchNavigation = {
+      ...navigation,
+      action: '',
+      sessionKey: '',
+      initialTitle: '',
+    }
+  }
 }
 
 function larkInboxStateFile() {

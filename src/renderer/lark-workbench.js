@@ -12,6 +12,17 @@ const agentTaskList = document.getElementById('agent-task-list')
 const createAgentTaskButton = document.getElementById('create-agent-task')
 const refreshAgentTasksButton = document.getElementById('refresh-agent-tasks')
 const closeAgentTasksButton = document.getElementById('close-agent-tasks')
+const agentTaskDialog = document.getElementById('agent-task-dialog')
+const agentTaskDialogForm = document.getElementById('agent-task-dialog-form')
+const agentTaskDialogEyebrow = document.getElementById('agent-task-dialog-eyebrow')
+const agentTaskDialogTitle = document.getElementById('agent-task-dialog-title')
+const agentTaskDialogDescription = document.getElementById('agent-task-dialog-description')
+const agentTaskDialogField = document.getElementById('agent-task-dialog-field')
+const agentTaskDialogLabel = document.getElementById('agent-task-dialog-label')
+const agentTaskDialogInput = document.getElementById('agent-task-dialog-input')
+const agentTaskDialogSubmit = document.getElementById('agent-task-dialog-submit')
+const agentTaskDialogCancel = document.getElementById('agent-task-dialog-cancel')
+const agentTaskDialogClose = document.getElementById('agent-task-dialog-close')
 const toggleAgendaButton = document.getElementById('toggle-agenda')
 const agendaStatus = document.getElementById('agenda-status')
 const agendaList = document.getElementById('agenda-list')
@@ -66,6 +77,61 @@ const state = {
 }
 
 let toastTimer = null
+let agentTaskDialogResolve = null
+let agentTaskDialogRequiresInput = true
+
+function finishAgentTaskDialog(value) {
+  const resolve = agentTaskDialogResolve
+  agentTaskDialogResolve = null
+  if (agentTaskDialog.open) agentTaskDialog.close()
+  if (resolve) resolve(value)
+}
+
+function openAgentTaskDialog({
+  eyebrow = 'MY TASK',
+  title = '新建任务',
+  description = '',
+  label = '任务名称',
+  initialValue = '',
+  placeholder = '例如：完成桌宠任务工作台',
+  submitLabel = '确认',
+  requiresInput = true,
+  danger = false,
+} = {}) {
+  if (agentTaskDialogResolve) finishAgentTaskDialog(null)
+  agentTaskDialogRequiresInput = requiresInput
+  agentTaskDialogEyebrow.textContent = eyebrow
+  agentTaskDialogTitle.textContent = title
+  agentTaskDialogDescription.textContent = description
+  agentTaskDialogDescription.hidden = !description
+  agentTaskDialogField.hidden = !requiresInput
+  agentTaskDialogLabel.textContent = label
+  agentTaskDialogInput.value = initialValue
+  agentTaskDialogInput.placeholder = placeholder
+  agentTaskDialogInput.required = requiresInput
+  agentTaskDialogInput.setCustomValidity('')
+  agentTaskDialogSubmit.textContent = submitLabel
+  agentTaskDialog.classList.toggle('danger', danger)
+
+  return new Promise((resolve) => {
+    agentTaskDialogResolve = resolve
+    try {
+      agentTaskDialog.showModal()
+      requestAnimationFrame(() => {
+        if (requiresInput) {
+          agentTaskDialogInput.focus()
+          agentTaskDialogInput.select()
+        } else {
+          agentTaskDialogSubmit.focus()
+        }
+      })
+    } catch (error) {
+      agentTaskDialogResolve = null
+      showToast(`无法打开任务编辑器：${error?.message || error}`)
+      resolve(null)
+    }
+  })
+}
 
 function setActiveWorkbenchTab(tab, { taskId = '' } = {}) {
   state.activeTab = validWorkbenchTabs.has(tab) ? tab : 'messages'
@@ -599,12 +665,19 @@ async function assignAgentSession(select) {
   let request = { sessionKey, taskId: value }
   if (value === '__new__') {
     const session = agentSessionByKey(sessionKey)
-    const title = window.prompt('新任务名称', session?.title || '新任务')
-    if (!title?.trim()) {
+    select.disabled = true
+    const title = await openAgentTaskDialog({
+      title: '新建任务并归组',
+      description: '创建一个属于你的任务，并把当前 Session 直接归入其中。Session 的运行进度不会覆盖任务进度。',
+      initialValue: session?.title || '',
+      submitLabel: '创建并归组',
+    })
+    if (!title) {
       select.value = currentTaskId
+      select.disabled = false
       return
     }
-    request = { sessionKey, title: title.trim() }
+    request = { sessionKey, title }
   }
   select.disabled = true
   try {
@@ -625,22 +698,51 @@ async function assignAgentSession(select) {
   }
 }
 
-async function createAgentTask() {
-  const title = window.prompt('今天要完成什么？', '新任务')
-  if (!title?.trim()) return
-  await mutateAgentTasks(
-    () => window.pet.createAgentTaskGroup({ title: title.trim() }),
-    '已创建今日任务',
+async function createAgentTask({ sessionKey = '', initialTitle = '' } = {}) {
+  const session = sessionKey ? agentSessionByKey(sessionKey) : null
+  const title = await openAgentTaskDialog({
+    title: sessionKey ? '新建任务并归组' : '新建任务',
+    description: sessionKey
+      ? '创建一个属于你的任务，并把选中的 Session 直接归入其中。'
+      : '记录你今天真正要完成的事项，之后可以把多个 Session 归到这个任务下。',
+    initialValue: initialTitle || session?.title || '',
+    submitLabel: sessionKey ? '创建并归组' : '创建任务',
+  })
+  if (!title) return false
+
+  createAgentTaskButton.disabled = true
+  const changed = await mutateAgentTasks(
+    () => sessionKey
+      ? window.pet.assignAgentSession({ sessionKey, title })
+      : window.pet.createAgentTaskGroup({ title }),
+    sessionKey ? '已创建任务并归入 Session' : '已创建今日任务',
   )
+  createAgentTaskButton.disabled = false
+  if (!changed) return false
+
+  const matchingTask = userAgentTasks()
+    .filter(task => task.title === title)
+    .sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))[0]
+  if (matchingTask) {
+    state.focusedTaskId = matchingTask.id
+    render()
+  }
+  return true
 }
 
 async function renameAgentTask(taskId) {
   const task = state.agentTasks.tasks.find(item => item.id === taskId)
   if (!task) return
-  const title = window.prompt('任务名称', task.title || '')
-  if (!title?.trim() || title.trim() === task.title) return
+  const title = await openAgentTaskDialog({
+    eyebrow: 'EDIT MY TASK',
+    title: '重命名任务',
+    description: '这里只修改你定义的任务名称，不会改动关联 Session 的标题或运行状态。',
+    initialValue: task.title || '',
+    submitLabel: '保存名称',
+  })
+  if (!title || title === task.title) return
   try {
-    const result = await window.pet.renameAgentTask({ taskId, title: title.trim() })
+    const result = await window.pet.renameAgentTask({ taskId, title })
     if (!result?.ok) {
       showToast(`重命名失败：${result?.error || '未知错误'}`)
       return
@@ -656,7 +758,14 @@ async function renameAgentTask(taskId) {
 async function deleteAgentTask(taskId) {
   const task = state.agentTasks.tasks.find(item => item.id === taskId)
   if (!task) return
-  const confirmed = window.confirm(`删除任务“${task.title}”？\n\n关联 Session 会回到待归组，Session 记录不会丢失；该任务的 Todo 会被删除。`)
+  const confirmed = await openAgentTaskDialog({
+    eyebrow: 'DELETE MY TASK',
+    title: `删除“${task.title}”？`,
+    description: '关联 Session 会回到待归组，Session 记录不会丢失；这个任务下的 Todo 会被删除。',
+    submitLabel: '删除任务',
+    requiresInput: false,
+    danger: true,
+  })
   if (!confirmed) return
   const deleted = await mutateAgentTasks(
     () => window.pet.deleteAgentTaskGroup({ taskId }),
@@ -1254,7 +1363,40 @@ workbenchTabs.forEach((button) => {
 closeAgentTasksButton.addEventListener('click', () => setActiveWorkbenchTab('messages'))
 
 refreshAgentTasksButton.addEventListener('click', refreshAgentTasks)
-createAgentTaskButton.addEventListener('click', createAgentTask)
+createAgentTaskButton.addEventListener('click', () => createAgentTask())
+
+agentTaskDialogForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  if (!agentTaskDialogRequiresInput) {
+    finishAgentTaskDialog(true)
+    return
+  }
+  const title = agentTaskDialogInput.value.trim()
+  if (!title) {
+    agentTaskDialogInput.setCustomValidity('请输入任务名称')
+    agentTaskDialogInput.reportValidity()
+    return
+  }
+  agentTaskDialogInput.setCustomValidity('')
+  finishAgentTaskDialog(title)
+})
+
+agentTaskDialogInput.addEventListener('input', () => {
+  agentTaskDialogInput.setCustomValidity('')
+})
+
+agentTaskDialogCancel.addEventListener('click', () => finishAgentTaskDialog(null))
+agentTaskDialogClose.addEventListener('click', () => finishAgentTaskDialog(null))
+agentTaskDialog.addEventListener('cancel', (event) => {
+  event.preventDefault()
+  finishAgentTaskDialog(null)
+})
+agentTaskDialog.addEventListener('close', () => {
+  if (agentTaskDialogResolve) finishAgentTaskDialog(null)
+})
+agentTaskDialog.addEventListener('click', (event) => {
+  if (event.target === agentTaskDialog) finishAgentTaskDialog(null)
+})
 
 agentTaskList.addEventListener('click', (event) => {
   const rename = event.target.closest('[data-agent-task-rename]')
@@ -1464,6 +1606,12 @@ window.pet.onKnowledgeUpdate?.((knowledge) => {
 
 window.pet.onWorkbenchNavigate?.((request = {}) => {
   setActiveWorkbenchTab(request.tab, { taskId: request.taskId })
+  if (request.action === 'create-task') {
+    requestAnimationFrame(() => createAgentTask({
+      sessionKey: String(request.sessionKey || ''),
+      initialTitle: String(request.initialTitle || ''),
+    }))
+  }
 })
 
 Promise.all([

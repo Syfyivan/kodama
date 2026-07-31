@@ -296,6 +296,40 @@
       </div>
     </div>
 
+    <dialog id="agent-task-dialog" class="agent-task-dialog" aria-labelledby="agent-task-dialog-title">
+      <form id="agent-task-dialog-form" class="agent-task-dialog-card" method="dialog" novalidate>
+        <header class="agent-task-dialog-head">
+          <div class="agent-task-dialog-mark" aria-hidden="true">✓</div>
+          <div>
+            <p id="agent-task-dialog-eyebrow" class="eyebrow">MY TASK</p>
+            <h2 id="agent-task-dialog-title">新建任务</h2>
+          </div>
+          <button id="agent-task-dialog-close" class="agent-task-dialog-close" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="agent-task-dialog-body">
+          <p id="agent-task-dialog-description" class="agent-task-dialog-description">
+            记录你今天真正要完成的事项，之后可以把多个 Session 归到这个任务下。
+          </p>
+          <label id="agent-task-dialog-field" class="agent-task-dialog-field" for="agent-task-dialog-input">
+            <span id="agent-task-dialog-label">任务名称</span>
+            <input
+              id="agent-task-dialog-input"
+              name="title"
+              type="text"
+              maxlength="120"
+              autocomplete="off"
+              placeholder="例如：完成桌宠任务工作台"
+            />
+            <small>任务进度由你维护，不会被 Session 进度自动覆盖。</small>
+          </label>
+        </div>
+        <footer class="agent-task-dialog-actions">
+          <button id="agent-task-dialog-cancel" class="secondary" type="button">取消</button>
+          <button id="agent-task-dialog-submit" class="primary" type="submit">创建任务</button>
+        </footer>
+      </form>
+    </dialog>
+
     <div id="workbench-toast" class="toast" hidden></div>
     <script src="./lark-workbench.js"></script>
     <script type="module" src="./bridge-tasks.js"></script>

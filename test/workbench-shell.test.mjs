@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
-const [html, main, preload, renderer] = await Promise.all([
+const [html, main, preload, renderer, workbenchRenderer, workbenchCss] = await Promise.all([
   readFile(new URL('../src/renderer/lark-workbench.html', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/index.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/preload.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/renderer/renderer.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/renderer/lark-workbench.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/renderer/lark-workbench.css', import.meta.url), 'utf8'),
 ])
 
 test('the workbench exposes every manager as a tab in one document', () => {
@@ -29,6 +31,16 @@ test('task edit buttons navigate to the centered task workspace', () => {
   assert.match(renderer, /openUnifiedWorkbench\('tasks', editTask\.dataset\.agentTaskEdit\)/)
   assert.match(renderer, /openUnifiedWorkbench\('tasks', userTask\.dataset\.openUserTask \|\| userTask\.dataset\.userTaskId\)/)
   assert.doesNotMatch(renderer, /expanded \? agentTaskEditorHtml/)
+})
+
+test('task actions use a centered workbench dialog instead of unsupported browser prompts', () => {
+  assert.match(html, /<dialog id="agent-task-dialog"/)
+  assert.match(html, /<form id="agent-task-dialog-form"/)
+  assert.match(workbenchCss, /\.agent-task-dialog::backdrop/)
+  assert.match(workbenchRenderer, /agentTaskDialog\.showModal\(\)/)
+  assert.match(workbenchRenderer, /createAgentTaskButton\.addEventListener\('click', \(\) => createAgentTask\(\)\)/)
+  assert.doesNotMatch(workbenchRenderer, /window\.(?:prompt|confirm)\(/)
+  assert.doesNotMatch(renderer, /window\.(?:prompt|confirm)\(/)
 })
 
 test('opening the workbench releases the full-screen pet overlay mouse capture', () => {

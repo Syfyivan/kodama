@@ -3456,16 +3456,17 @@ async function assignAgentSession(select) {
     select.disabled = false
     return
   }
-  let request = { sessionKey, taskId: targetTaskId }
   if (targetTaskId === '__new__') {
     const session = agentSessionByKey(sessionKey)
-    const title = window.prompt('新任务名称', session?.title || '新任务')
-    if (!title?.trim()) {
-      select.value = currentTaskId
-      return
-    }
-    request = { sessionKey, title: title.trim() }
+    select.value = currentTaskId
+    await openUnifiedWorkbench('tasks', '', {
+      action: 'create-task',
+      sessionKey,
+      initialTitle: session?.title || '',
+    })
+    return
   }
+  const request = { sessionKey, taskId: targetTaskId }
   select.disabled = true
   try {
     const result = await window.pet.assignAgentSession?.(request)
@@ -3507,15 +3508,7 @@ async function runAgentTaskMutation(action, successText = '') {
 }
 
 async function createAgentTask() {
-  const title = window.prompt('今天要完成什么？', '新任务')
-  if (!title?.trim()) return
-  const created = await runAgentTaskMutation(
-    () => window.pet.createAgentTaskGroup?.({ title: title.trim() }),
-    '已创建今日任务',
-  )
-  if (!created) return
-  const task = agentUserTasks().find(item => item.title === title.trim())
-  if (task) openUnifiedWorkbench('tasks', task.id)
+  await openUnifiedWorkbench('tasks', '', { action: 'create-task' })
 }
 
 function larkMessageTarget(message) {
@@ -3882,10 +3875,10 @@ async function openBridgeTasksWindow() {
   if (!result?.ok) say(`打开任务详情失败：${result?.error || '未知错误'}`, 2600)
 }
 
-async function openUnifiedWorkbench(tab = 'messages', taskId = '') {
+async function openUnifiedWorkbench(tab = 'messages', taskId = '', options = {}) {
   if (panelVisible) togglePanel(false)
   window.pet.setIgnoreMouse(true, { forward: true })
-  const result = await window.pet.openLarkWorkbench?.({ tab, taskId })
+  const result = await window.pet.openLarkWorkbench?.({ tab, taskId, ...options })
   if (!result?.ok) say(`打开工作台失败：${result?.error || '未知错误'}`, 2600)
   return result || { ok: false, error: '工作台入口不可用' }
 }

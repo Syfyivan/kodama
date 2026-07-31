@@ -2176,6 +2176,156 @@ body {
   font-size: 9px;
 }
 
+.agent-task-dialog {
+  width: min(440px, calc(100vw - 40px));
+  max-width: none;
+  margin: auto;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 20px;
+  outline: 0;
+  background: transparent;
+  color: #1f2937;
+}
+
+.agent-task-dialog::backdrop {
+  background: rgba(21, 29, 43, 0.38);
+  backdrop-filter: blur(5px);
+}
+
+.agent-task-dialog-card {
+  overflow: hidden;
+  border: 1px solid rgba(205, 215, 230, 0.95);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow:
+    0 26px 70px rgba(24, 35, 55, 0.24),
+    0 4px 14px rgba(24, 35, 55, 0.08);
+}
+
+.agent-task-dialog-head {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #e8edf4;
+  background:
+    radial-gradient(circle at 8% 5%, rgba(69, 110, 232, 0.12), transparent 46%),
+    #fbfcff;
+}
+
+.agent-task-dialog-head h2 {
+  margin: 0;
+  color: #19243a;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.agent-task-dialog-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 13px;
+  background: #e9efff;
+  color: #315bd6;
+  font-size: 19px;
+  font-weight: 850;
+}
+
+.agent-task-dialog.danger .agent-task-dialog-mark {
+  background: #fff0f0;
+  color: #c64d4d;
+}
+
+.agent-task-dialog-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border-radius: 9px;
+  background: transparent;
+  color: #7b8798;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.agent-task-dialog-close:hover {
+  background: #eef2f7;
+}
+
+.agent-task-dialog-body {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.agent-task-dialog-description {
+  margin: 0;
+  color: #66758a;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.agent-task-dialog-field {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-task-dialog-field[hidden] {
+  display: none;
+}
+
+.agent-task-dialog-field > span {
+  color: #344258;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.agent-task-dialog-field input {
+  width: 100%;
+  height: 44px;
+  padding: 0 13px;
+  border: 1px solid #d7dfeb;
+  border-radius: 11px;
+  outline: 0;
+  background: #fbfcfe;
+  color: #243149;
+  font-size: 14px;
+}
+
+.agent-task-dialog-field input:focus {
+  border-color: #6f91ed;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(69, 110, 232, 0.11);
+}
+
+.agent-task-dialog-field small {
+  color: #929dac;
+  font-size: 10.5px;
+}
+
+.agent-task-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid #edf0f5;
+  background: #fafbfd;
+}
+
+.agent-task-dialog-actions button {
+  min-width: 84px;
+}
+
+.agent-task-dialog.danger .agent-task-dialog-actions .primary {
+  background: #c94f4f;
+  box-shadow: 0 7px 16px rgba(201, 79, 79, 0.18);
+}
+
 @media (max-width: 860px) {
   .workbench-header-note {
     display: none;
