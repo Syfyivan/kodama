@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const args = process.argv.slice(2)
 const dryRun = args.includes('--dry-run')
 const force = args.includes('--force')
+const bindOnly = args.includes('--bind-only')
+const resetSyncState = args.includes('--reset-sync-state')
 const name = valueAfter('--name') || 'Kodama 飞书群消息归档'
 const tableName = valueAfter('--table') || '最近群消息'
 const suppliedTableId = valueAfter('--table-id') || ''
@@ -14,6 +17,8 @@ const folderToken = valueAfter('--folder-token') || process.env.KODAMA_LARK_BASE
 const suppliedBaseToken = valueAfter('--base-token') || ''
 const dir = userDataDir()
 const configFile = join(dir, 'kodama-lark-base-config.json')
+const stateFile = join(dir, 'kodama-lark-base-state.json')
+const previousConfig = readJsonFile(configFile)
 
 const fields = [
   { field_name: '时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm' } },
@@ -28,6 +33,7 @@ const fields = [
   { field_name: 'thread_id', type: 'text' },
   { field_name: '归档时间', type: 'datetime', style: { format: 'yyyy/MM/dd HH:mm' } },
 ]
+const visibleFields = ['时间', '群名', '发送人', '内容', '来源', '类型']
 
 function valueAfter(flag) {
   const index = args.indexOf(flag)
@@ -40,10 +46,20 @@ function userDataDir() {
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'kodama')
 }
 
-function runLarkCli(cliArgs) {
-  const output = execFileSync('lark-cli', cliArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  process.stdout.write(output)
-  return parseJson(output)
+function runLarkCli(cliArgs, { allowNoop = false } = {}) {
+  try {
+    const output = execFileSync('lark-cli', cliArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+    process.stdout.write(output)
+    return parseJson(output)
+  } catch (error) {
+    const output = String(error?.stderr || error?.stdout || '')
+    const payload = parseJson(output)
+    if (allowNoop && payload?.error?.code === 800070003) {
+      process.stdout.write(output)
+      return payload
+    }
+    throw error
+  }
 }
 
 function parseJson(output) {
@@ -56,6 +72,30 @@ function parseJson(output) {
   } catch {
     return {}
   }
+}
+
+function readJsonFile(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function syncTargetId(baseToken, tableId) {
+  return createHash('sha256')
+    .update(`${String(baseToken || '').trim()}\u0000${String(tableId || '').trim()}`)
+    .digest('hex')
+    .slice(0, 24)
+}
+
+function backupSyncState() {
+  if (!existsSync(stateFile)) return ''
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupFile = join(dir, `kodama-lark-base-state.${timestamp}.json.bak`)
+  renameSync(stateFile, backupFile)
+  return backupFile
 }
 
 function firstString(...values) {
@@ -127,15 +167,6 @@ function viewIdFromCreate(result) {
   )
 }
 
-function fieldIdFromCreate(result) {
-  return firstString(
-    result?.data?.field?.id,
-    result?.data?.field?.field_id,
-    result?.field?.id,
-    result?.field?.field_id,
-  )
-}
-
 function firstViewIdFromList(result) {
   return firstString(
     result?.data?.items?.[0]?.view_id,
@@ -150,25 +181,27 @@ function printConfig(config) {
   console.log(JSON.stringify({ ...config, baseToken: `${config.baseToken.slice(0, 8)}...` }, null, 2))
 }
 
-function setHiddenFields(targetTableId, viewId, viewName, hiddenFieldIds) {
-  if (!viewId || !hiddenFieldIds.length) return
-  const hideArgs = [
-    'api',
-    'PATCH',
-    `/open-apis/bitable/v1/apps/${baseToken}/tables/${targetTableId}/views/${viewId}`,
+function setVisibleFields(targetTableId, viewId) {
+  if (!viewId) return
+  const visibleArgs = [
+    'base',
+    '+view-set-visible-fields',
     '--as',
     'user',
-    '--data',
-    JSON.stringify({
-      view_name: viewName,
-      property: { hidden_fields: hiddenFieldIds },
-    }),
+    '--base-token',
+    baseToken,
+    '--table-id',
+    targetTableId,
+    '--view-id',
+    viewId,
+    '--json',
+    JSON.stringify({ visible_fields: visibleFields }),
   ]
-  if (dryRun) hideArgs.push('--dry-run')
-  runLarkCli(hideArgs)
+  if (dryRun) visibleArgs.push('--dry-run')
+  runLarkCli(visibleArgs, { allowNoop: true })
 }
 
-function configureReadableViews(targetTableId, tableCreateResult, hiddenFieldIds) {
+function configureReadableViews(targetTableId, tableCreateResult) {
   const defaultViewId = dryRun
     ? 'Grid View'
     : firstString(defaultViewIdFrom(tableCreateResult), firstViewIdFromList(runLarkCli([
@@ -213,11 +246,11 @@ function configureReadableViews(targetTableId, tableCreateResult, hiddenFieldIds
       '--view-id',
       defaultViewId,
       '--json',
-      JSON.stringify([{ field: '时间', desc: true }]),
+      JSON.stringify({ sort_config: [{ field: '时间', desc: true }] }),
     ]
     if (dryRun) sortArgs.push('--dry-run')
     runLarkCli(sortArgs)
-    setHiddenFields(targetTableId, defaultViewId, '最近消息', hiddenFieldIds)
+    setVisibleFields(targetTableId, defaultViewId)
   }
 
   console.log('\nCreating view: 按群查看')
@@ -250,7 +283,7 @@ function configureReadableViews(targetTableId, tableCreateResult, hiddenFieldIds
     '--view-id',
     groupViewId,
     '--json',
-    JSON.stringify([{ field: '群名', desc: false }]),
+    JSON.stringify({ group_config: [{ field: '群名', desc: false }] }),
   ]
   if (dryRun) groupArgs.push('--dry-run')
   runLarkCli(groupArgs)
@@ -267,11 +300,11 @@ function configureReadableViews(targetTableId, tableCreateResult, hiddenFieldIds
     '--view-id',
     groupViewId,
     '--json',
-    JSON.stringify([{ field: '时间', desc: true }]),
+    JSON.stringify({ sort_config: [{ field: '时间', desc: true }] }),
   ]
   if (dryRun) groupSortArgs.push('--dry-run')
   runLarkCli(groupSortArgs)
-  setHiddenFields(targetTableId, groupViewId, '按群查看', hiddenFieldIds)
+  setVisibleFields(targetTableId, groupViewId)
 }
 
 const baseArgs = ['base', '+base-create', '--as', 'user', '--name', name, '--time-zone', 'Asia/Shanghai']
@@ -287,6 +320,9 @@ if (!dryRun && existsSync(configFile) && !force) {
 let baseResult = {}
 let baseToken = suppliedBaseToken
 let baseUrl = ''
+if (bindOnly && (!suppliedBaseToken || !suppliedTableId)) {
+  throw new Error('--bind-only requires --base-token and --table-id')
+}
 if (baseToken) {
   console.log(`Using Base: ${baseToken}`)
 } else {
@@ -312,36 +348,33 @@ if (tableId) {
   tableId = dryRun ? tableName : tableIdFrom(tableResult)
 }
 
-const fieldIdsByName = new Map()
-for (const field of fields) {
-  console.log(`\nCreating field: ${field.field_name}`)
-  const fieldArgs = [
-    'base',
-    '+field-create',
-    '--as',
-    'user',
-    '--base-token',
-    baseToken,
-    '--table-id',
-    tableId,
-    '--json',
-    JSON.stringify(field),
-  ]
-  if (dryRun) fieldArgs.push('--dry-run')
-  const fieldResult = runLarkCli(fieldArgs)
-  fieldIdsByName.set(field.field_name, dryRun ? field.field_name : fieldIdFromCreate(fieldResult))
+if (!bindOnly) {
+  for (const field of fields) {
+    console.log(`\nCreating field: ${field.field_name}`)
+    const fieldArgs = [
+      'base',
+      '+field-create',
+      '--as',
+      'user',
+      '--base-token',
+      baseToken,
+      '--table-id',
+      tableId,
+      '--json',
+      JSON.stringify(field),
+    ]
+    if (dryRun) fieldArgs.push('--dry-run')
+    runLarkCli(fieldArgs)
+  }
+
+  configureReadableViews(tableId, tableResult)
 }
-
-const hiddenFieldIds = ['消息ID', 'chat_id', 'sender_id', 'thread_id', '归档时间']
-  .map(fieldName => fieldIdsByName.get(fieldName))
-  .filter(Boolean)
-
-configureReadableViews(tableId, tableResult, hiddenFieldIds)
 
 const config = {
   enabled: true,
   baseToken,
   tableId,
+  syncTargetId: syncTargetId(baseToken, tableId),
   tableName,
   baseName: name,
   url: withTableParam(baseUrl, tableId),
@@ -355,6 +388,17 @@ if (dryRun) {
 }
 
 if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+const targetChanged = Boolean(
+  previousConfig.baseToken
+  && (
+    previousConfig.baseToken !== config.baseToken
+    || previousConfig.tableId !== config.tableId
+  ),
+)
+if (resetSyncState || targetChanged) {
+  const backupFile = backupSyncState()
+  if (backupFile) console.log(`\nBacked up the previous sync state to ${backupFile}`)
+}
 writeFileSync(configFile, JSON.stringify(config, null, 2))
 printConfig(config)
 console.log(`\nWrote ${configFile}`)

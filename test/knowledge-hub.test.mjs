@@ -63,8 +63,8 @@ test('Lark document search strips highlight markup and always uses user identity
       return {
         data: {
           results: [{
-            title_highlighted: '<h>AI</h> Agent',
-            summary_highlighted: '一个 <h>Agent</h> 文档',
+            title_highlighted: '<h>AI</h> &amp; Agent',
+            summary_highlighted: '一个 <h>Agent</h> 文档 &amp; 索引',
             result_meta: {
               url: 'https://bytedance.larkoffice.com/docx/demo',
               owner_name: '宋一凡',
@@ -76,8 +76,8 @@ test('Lark document search strips highlight markup and always uses user identity
     },
   })
   const found = await hub.search('lark', 'AI Agent')
-  assert.equal(found.results[0].title, 'AI Agent')
-  assert.equal(found.results[0].snippet, '一个 Agent 文档')
+  assert.equal(found.results[0].title, 'AI & Agent')
+  assert.equal(found.results[0].snippet, '一个 Agent 文档 & 索引')
   assert.deepEqual(calls[0].slice(0, 5), ['docs', '+search', '--as', 'user', '--query'])
   assert.equal(larkDocResults({ data: { results: [] } }).length, 0)
 })

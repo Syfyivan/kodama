@@ -23,6 +23,8 @@ const CJS = [
   'src/main/knowledge-agent.js',
   'src/main/knowledge-hub.js',
   'src/main/lark-base-sink.js',
+  'src/main/lark-assistant-cache.js',
+  'src/main/lark-agenda.js',
   'src/main/lark-draft-apply.js',
   'src/main/lark-inbox.js',
   'src/main/lark-links.js',

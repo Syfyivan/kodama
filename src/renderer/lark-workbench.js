@@ -6,6 +6,12 @@ const messageCount = document.getElementById('message-count')
 const messageList = document.getElementById('message-list')
 const detail = document.getElementById('message-detail')
 const toast = document.getElementById('workbench-toast')
+const toggleAgendaButton = document.getElementById('toggle-agenda')
+const agendaDrawer = document.getElementById('agenda-drawer')
+const agendaStatus = document.getElementById('agenda-status')
+const agendaList = document.getElementById('agenda-list')
+const refreshAgendaButton = document.getElementById('refresh-agenda')
+const closeAgendaButton = document.getElementById('close-agenda')
 const toggleWorkItemsButton = document.getElementById('toggle-work-items')
 const workItemDrawer = document.getElementById('work-item-drawer')
 const workItemStatus = document.getElementById('work-item-status')
@@ -34,9 +40,12 @@ const state = {
   query: '',
   attentionOnly: true,
   draftEdits: new Map(),
+  agenda: { events: [], count: 0, loading: false, error: '', updatedAt: '', range: {} },
+  agendaDrawerOpen: false,
   workItems: { items: [], count: 0, openCount: 0, runningCount: 0 },
   workItemDrawerOpen: false,
   workItemBusy: new Set(),
+  extractionBusy: new Set(),
   knowledge: { items: [], count: 0, summarizedCount: 0, ideaCount: 0 },
   knowledgeDrawerOpen: false,
   knowledgeResults: [],
@@ -112,6 +121,18 @@ function normalizeWorkItems(value) {
     count: Number(value?.count ?? items.length),
     openCount: Number(value?.openCount ?? items.filter(item => item.status === 'open').length),
     runningCount: Number(value?.runningCount ?? items.filter(item => item.status === 'running').length),
+  }
+}
+
+function normalizeAgenda(value) {
+  const events = Array.isArray(value?.events) ? value.events : []
+  return {
+    events,
+    count: Number(value?.count ?? events.length),
+    loading: value?.loading === true,
+    error: String(value?.error || ''),
+    updatedAt: String(value?.updatedAt || ''),
+    range: value?.range && typeof value.range === 'object' ? value.range : {},
   }
 }
 
@@ -227,6 +248,7 @@ function extractedItemHtml(message, kind, items) {
     const item = kind === 'risk' ? { title: raw, priority: 'high' } : raw || {}
     const sourceKey = `${message.messageId}:${kind}:${index}`
     const captured = state.workItems.items.find(value => value.sourceKey === sourceKey)
+    const busy = state.extractionBusy.has(sourceKey) || captured?.agent?.status === 'running'
     const meta = [
       item.priority,
       item.dueAt,
@@ -234,7 +256,12 @@ function extractedItemHtml(message, kind, items) {
     return [
       '<li class="extraction-row">',
       `<span>${escapeHtml(item.title || '')} ${meta}</span>`,
-      `<button class="mini-action" type="button" data-capture-kind="${kind}" data-capture-index="${index}"${captured ? ' disabled' : ''}>${captured ? '已收录' : '收为工作项'}</button>`,
+      '<span class="extraction-actions">',
+      `<button class="mini-action" type="button" data-capture-kind="${kind}" data-capture-index="${index}" data-capture-action="local"${captured || busy ? ' disabled' : ''}>${captured ? '已收录' : '收录'}</button>`,
+      `<button class="mini-action" type="button" data-capture-kind="${kind}" data-capture-index="${index}" data-capture-action="lark"${captured?.lark?.guid || busy ? ' disabled' : ''}>${captured?.lark?.guid ? '已转飞书' : '飞书任务'}</button>`,
+      `<button class="mini-action" type="button" data-capture-kind="${kind}" data-capture-index="${index}" data-capture-action="plan"${busy ? ' disabled' : ''}>Agent 计划</button>`,
+      `<button class="mini-action primary-mini" type="button" data-capture-kind="${kind}" data-capture-index="${index}" data-capture-action="execute"${busy ? ' disabled' : ''}>Agent 执行</button>`,
+      '</span>',
       '</li>',
     ].join('')
   }).join('')}</ul>`
@@ -436,6 +463,55 @@ function renderWorkItems() {
   }).join('')
 }
 
+function rsvpLabel(value) {
+  return {
+    accept: '已接受',
+    decline: '已拒绝',
+    tentative: '待定',
+    needs_action: '待回复',
+  }[value] || value
+}
+
+function renderAgenda() {
+  const events = state.agenda.events.slice().sort((a, b) => Date.parse(a.startAt || '') - Date.parse(b.startAt || ''))
+  toggleAgendaButton.textContent = `会议 ${events.length}`
+  toggleAgendaButton.classList.toggle('primary', state.agendaDrawerOpen)
+  toggleAgendaButton.classList.toggle('secondary', !state.agendaDrawerOpen)
+  agendaDrawer.hidden = !state.agendaDrawerOpen
+  refreshAgendaButton.disabled = state.agenda.loading
+  refreshAgendaButton.textContent = state.agenda.loading ? '刷新中…' : '刷新日程'
+  agendaStatus.textContent = state.agenda.error
+    ? `日程读取异常：${state.agenda.error}`
+    : `${events.length} 场 · ${state.agenda.range.start || '今天'} 至 ${state.agenda.range.end || '未来 7 天'}`
+  if (!events.length) {
+    agendaList.className = 'work-item-list agenda-list empty'
+    agendaList.textContent = state.agenda.loading ? '正在读取飞书日程…' : '近期没有日程'
+    return
+  }
+  agendaList.className = 'work-item-list agenda-list'
+  agendaList.innerHTML = events.map((event) => {
+    const time = event.allDay
+      ? `${fmtTime(event.startAt, true) || event.startAt} · 全天`
+      : `${fmtTime(event.startAt, true)} – ${fmtTime(event.endAt)}`
+    const meta = [
+      time,
+      event.organizer ? `组织者 ${event.organizer}` : '',
+      event.rsvp ? rsvpLabel(event.rsvp) : '',
+    ].filter(Boolean)
+    return [
+      '<article class="agenda-card">',
+      `<div class="agenda-time">${escapeHtml(time)}</div>`,
+      `<strong>${escapeHtml(event.title || '未命名日程')}</strong>`,
+      meta.length > 1 ? `<p>${escapeHtml(meta.slice(1).join(' · '))}</p>` : '',
+      '<div class="work-item-actions">',
+      event.url ? `<button type="button" data-agenda-url="${escapeHtml(event.url)}">打开日程</button>` : '',
+      event.meetingUrl ? `<button class="agent-execute" type="button" data-agenda-url="${escapeHtml(event.meetingUrl)}">加入会议</button>` : '',
+      '</div>',
+      '</article>',
+    ].join('')
+  }).join('')
+}
+
 function knowledgeSourceLabel(value) {
   return {
     bytetech: 'ByteTech',
@@ -542,8 +618,20 @@ function render() {
   renderStatus()
   renderMessageList()
   renderDetail()
+  renderAgenda()
   renderWorkItems()
   renderKnowledge()
+}
+
+async function refreshAgenda() {
+  state.agenda = { ...state.agenda, loading: true, error: '' }
+  render()
+  try {
+    state.agenda = normalizeAgenda(await window.pet.refreshLarkAgenda())
+  } catch (error) {
+    state.agenda = { ...state.agenda, loading: false, error: error?.message || String(error) }
+  }
+  render()
 }
 
 async function refreshInbox() {
@@ -628,9 +716,13 @@ async function refreshWorkItems() {
   return state.workItems
 }
 
-async function captureExtractedItem(kind, index) {
+async function captureExtractedItem(kind, index, action = 'local') {
   const message = selectedMessage()
   if (!message) return
+  const sourceKey = `${message.messageId}:${kind}:${index}`
+  if (state.extractionBusy.has(sourceKey)) return
+  state.extractionBusy.add(sourceKey)
+  render()
   try {
     const result = await window.pet.createWorkItemFromAssistant({
       messageId: message.messageId,
@@ -641,12 +733,32 @@ async function captureExtractedItem(kind, index) {
       showToast(`收录失败：${result?.error || '未知错误'}`)
       return
     }
+    const id = result.item?.id
+    let followUp = null
+    if (action === 'lark') {
+      followUp = await window.pet.createLarkTaskFromWorkItem({ id })
+    } else if (action === 'plan' || action === 'execute') {
+      followUp = await window.pet.runWorkItemAgent({ id, mode: action })
+    }
     await refreshWorkItems()
     state.workItemDrawerOpen = true
     render()
-    showToast(result.created ? '已收为工作项' : '这个工作项已经收录')
+    if (followUp && !followUp.ok) {
+      showToast(`操作失败：${followUp.error || '未知错误'}`)
+    } else if (action === 'lark') {
+      showToast('已收录并创建飞书任务')
+    } else if (action === 'plan') {
+      showToast(followUp?.result?.outcome === 'planned' ? '已收录并生成 Agent 计划' : 'Agent 需要补充信息')
+    } else if (action === 'execute') {
+      showToast(followUp?.result?.outcome === 'completed' ? 'Agent 已执行并完成工作项' : 'Agent 已返回，请查看结果')
+    } else {
+      showToast(result.created ? '已收为工作项' : '这个工作项已经收录')
+    }
   } catch (error) {
     showToast(`收录失败：${error?.message || error}`)
+  } finally {
+    state.extractionBusy.delete(sourceKey)
+    render()
   }
 }
 
@@ -682,6 +794,16 @@ async function syncAllWorkItems() {
   } finally {
     syncWorkItemsButton.disabled = false
     syncWorkItemsButton.textContent = '同步飞书任务'
+  }
+}
+
+async function syncWorkItemsInBackground() {
+  try {
+    const result = await window.pet.syncWorkItems({})
+    state.workItems = normalizeWorkItems(result?.state || await window.pet.workItemsState())
+    render()
+  } catch {
+    // Manual sync remains available with a visible error path.
   }
 }
 
@@ -807,9 +929,13 @@ detail.addEventListener('click', (event) => {
   if (action === 'open-original') openOriginal()
   if (action === 'copy-draft') copyDraft()
   if (action === 'apply-draft') applyDraft()
-  const capture = event.target.closest('[data-capture-kind]')
+  const capture = event.target.closest('[data-capture-action]')
   if (capture) {
-    captureExtractedItem(capture.dataset.captureKind, Number(capture.dataset.captureIndex))
+    captureExtractedItem(
+      capture.dataset.captureKind,
+      Number(capture.dataset.captureIndex),
+      capture.dataset.captureAction,
+    )
   }
   const doc = event.target.closest('[data-open-doc]')?.dataset.openDoc
   if (doc) {
@@ -820,7 +946,10 @@ detail.addEventListener('click', (event) => {
 
 toggleWorkItemsButton.addEventListener('click', () => {
   state.workItemDrawerOpen = !state.workItemDrawerOpen
-  if (state.workItemDrawerOpen) state.knowledgeDrawerOpen = false
+  if (state.workItemDrawerOpen) {
+    state.knowledgeDrawerOpen = false
+    state.agendaDrawerOpen = false
+  }
   render()
 })
 
@@ -833,13 +962,36 @@ syncWorkItemsButton.addEventListener('click', syncAllWorkItems)
 
 toggleKnowledgeButton.addEventListener('click', () => {
   state.knowledgeDrawerOpen = !state.knowledgeDrawerOpen
-  if (state.knowledgeDrawerOpen) state.workItemDrawerOpen = false
+  if (state.knowledgeDrawerOpen) {
+    state.workItemDrawerOpen = false
+    state.agendaDrawerOpen = false
+  }
   render()
 })
 
 closeKnowledgeButton.addEventListener('click', () => {
   state.knowledgeDrawerOpen = false
   render()
+})
+
+toggleAgendaButton.addEventListener('click', () => {
+  state.agendaDrawerOpen = !state.agendaDrawerOpen
+  if (state.agendaDrawerOpen) {
+    state.workItemDrawerOpen = false
+    state.knowledgeDrawerOpen = false
+  }
+  render()
+})
+
+closeAgendaButton.addEventListener('click', () => {
+  state.agendaDrawerOpen = false
+  render()
+})
+
+refreshAgendaButton.addEventListener('click', refreshAgenda)
+agendaList.addEventListener('click', (event) => {
+  const url = event.target.closest('[data-agenda-url]')?.dataset.agendaUrl
+  if (url) window.pet.openTarget({ url })
 })
 
 saveIdeaButton.addEventListener('click', saveIdea)
@@ -936,6 +1088,11 @@ window.pet.onLarkAssistantUpdate?.((assistant) => {
   render()
 })
 
+window.pet.onLarkAgendaUpdate?.((agenda) => {
+  state.agenda = normalizeAgenda(agenda)
+  render()
+})
+
 window.pet.onWorkItemsUpdate?.((workItems) => {
   state.workItems = normalizeWorkItems(workItems)
   render()
@@ -949,14 +1106,17 @@ window.pet.onKnowledgeUpdate?.((knowledge) => {
 Promise.all([
   window.pet.larkInbox?.(),
   window.pet.larkAssistantState?.(),
+  window.pet.larkAgenda?.(),
   window.pet.workItemsState?.(),
   window.pet.knowledgeState?.(),
-]).then(([inbox, assistant, workItems, knowledge]) => {
+]).then(([inbox, assistant, agenda, workItems, knowledge]) => {
   state.inbox = normalizeInbox(inbox)
   state.assistant = normalizeAssistant(assistant)
+  state.agenda = normalizeAgenda(agenda)
   state.workItems = normalizeWorkItems(workItems)
   state.knowledge = normalizeKnowledge(knowledge)
   render()
+  syncWorkItemsInBackground()
 }).catch((error) => {
   state.inbox = { ...state.inbox, error: error?.message || String(error) }
   render()

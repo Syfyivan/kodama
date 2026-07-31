@@ -11,6 +11,8 @@ const { createAgentEventContext } = require('./agent-event-context')
 const { larkChatUrls } = require('./lark-links')
 const { larkPasteScript, selectLarkAppName } = require('./lark-draft-apply')
 const { createLarkInbox } = require('./lark-inbox')
+const { createLarkAgendaLoader } = require('./lark-agenda')
+const { loadLarkAssistantCache, saveLarkAssistantCache } = require('./lark-assistant-cache')
 const { createLarkMessageArchive } = require('./lark-message-archive')
 const { createLarkBaseSink } = require('./lark-base-sink')
 const { createLarkWebPush } = require('./lark-web-push')
@@ -75,11 +77,18 @@ let larkInbox = null
 let larkArchive = null
 let larkBaseSink = null
 let larkWebPush = null
+let larkAgenda = null
+let larkAgendaTimer = null
 let workItemStore = null
+let workItemSyncTimer = null
+let workItemSyncPending = null
 let knowledgeHub = null
 let customPetStyleStore = null
-const larkAssistantResults = new Map()
+let larkAssistantResults = new Map()
+let larkAssistantResultsLoaded = false
 const larkAssistantPending = new Map()
+const larkAssistantAutoQueued = new Set()
+let larkAssistantAutoQueue = Promise.resolve()
 const workItemAgentPending = new Map()
 const knowledgeAgentPending = new Map()
 let larkWorkbenchStatus = { phase: 'idle', error: '', updatedAt: '' }
@@ -168,8 +177,8 @@ function startLarkBaseSink() {
 }
 
 function larkBaseBackfillLimit() {
-  const n = Number(process.env.KODAMA_LARK_BASE_BACKFILL_LIMIT || 500)
-  if (!Number.isFinite(n)) return 500
+  const n = Number(process.env.KODAMA_LARK_BASE_BACKFILL_LIMIT || 2000)
+  if (!Number.isFinite(n)) return 2000
   return Math.min(5000, Math.max(0, Math.round(n)))
 }
 
@@ -199,6 +208,7 @@ function startLarkInbox() {
       archiveLarkMessages(snapshot.messages || [], { source: meta.reason || meta.source || 'inbox' })
       const newMessages = Array.isArray(meta.newMessages) ? meta.newMessages : []
       if (!newMessages.length) return
+      scheduleLarkAttentionAnalysis(newMessages)
       const chatNames = Array.from(new Set(newMessages.map(message => message.chatName).filter(Boolean))).slice(0, 3)
       const first = newMessages[0] || {}
       emitRendererAgentEvent({
@@ -231,7 +241,56 @@ function startLarkWebPush() {
   return larkWebPush
 }
 
+function broadcastLarkAgenda(state) {
+  const snapshot = state || larkAgenda?.getState?.() || {
+    ok: true,
+    loading: false,
+    error: '',
+    events: [],
+    count: 0,
+    updatedAt: '',
+  }
+  sendToPet('pet:lark-agenda-updated', snapshot)
+  sendToLarkWorkbench('pet:lark-agenda-updated', snapshot)
+  return snapshot
+}
+
+function refreshLarkAgenda() {
+  return startLarkAgenda().refresh({ days: 7 })
+}
+
+function startLarkAgenda() {
+  if (larkAgenda) return larkAgenda
+  larkAgenda = createLarkAgendaLoader({
+    onUpdate: broadcastLarkAgenda,
+  })
+  larkAgendaTimer = setInterval(refreshLarkAgenda, 30 * 60 * 1000)
+  larkAgendaTimer.unref?.()
+  setTimeout(refreshLarkAgenda, 1200).unref?.()
+  return larkAgenda
+}
+
+function larkAssistantStateFile() {
+  return path.join(app.getPath('userData'), 'kodama-lark-assistant.json')
+}
+
+function ensureLarkAssistantResultsLoaded() {
+  if (larkAssistantResultsLoaded) return
+  larkAssistantResults = loadLarkAssistantCache(larkAssistantStateFile())
+  larkAssistantResultsLoaded = true
+}
+
+function persistLarkAssistantResults() {
+  if (!larkAssistantResultsLoaded) return
+  try {
+    saveLarkAssistantCache(larkAssistantStateFile(), larkAssistantResults)
+  } catch (error) {
+    console.error(`[kodama] persist Lark assistant cache failed: ${error?.message || error}`)
+  }
+}
+
 function larkAssistantState() {
+  ensureLarkAssistantResultsLoaded()
   return {
     ok: true,
     results: Object.fromEntries(larkAssistantResults),
@@ -241,6 +300,7 @@ function larkAssistantState() {
 }
 
 function broadcastLarkAssistantState() {
+  persistLarkAssistantResults()
   const state = larkAssistantState()
   sendToPet('pet:lark-assistant-updated', state)
   sendToLarkWorkbench('pet:lark-assistant-updated', state)
@@ -260,6 +320,7 @@ function larkMessageContext(messages, target, limit = 16) {
 }
 
 async function analyzeLarkInboxMessage(request = {}) {
+  ensureLarkAssistantResultsLoaded()
   const messageId = String(request.messageId || request.message_id || '').trim()
   if (!messageId) return { ok: false, error: 'missing-message-id' }
   if (!larkInbox) startLarkInbox()
@@ -320,6 +381,36 @@ async function analyzeLarkInboxMessage(request = {}) {
   return pending
 }
 
+function scheduleLarkAttentionAnalysis(messages = []) {
+  ensureLarkAssistantResultsLoaded()
+  const candidates = (Array.isArray(messages) ? messages : [])
+    .filter(message => message?.needsAttention && message?.messageId)
+    .filter(message => !larkAssistantAutoQueued.has(message.messageId))
+    .filter(message => !larkAssistantPending.has(message.messageId))
+    .filter(message => larkAssistantResults.get(message.messageId)?.status !== 'done')
+    .sort((a, b) => Date.parse(a.createdAt || a.createTime || '') - Date.parse(b.createdAt || b.createTime || ''))
+    .slice(0, 20)
+
+  for (const message of candidates) {
+    const messageId = message.messageId
+    larkAssistantAutoQueued.add(messageId)
+    larkAssistantAutoQueue = larkAssistantAutoQueue
+      .then(() => analyzeLarkInboxMessage({ messageId }))
+      .catch((error) => {
+        console.error(`[kodama] automatic Lark message analysis failed: ${error?.message || error}`)
+      })
+      .finally(() => {
+        larkAssistantAutoQueued.delete(messageId)
+      })
+  }
+  return candidates.length
+}
+
+function scheduleCurrentLarkAttentionAnalysis() {
+  const messages = larkInbox?.getSnapshot?.().messages || []
+  return scheduleLarkAttentionAnalysis(messages)
+}
+
 function workItemStateFile() {
   return path.join(app.getPath('userData'), 'kodama-work-items.json')
 }
@@ -344,10 +435,31 @@ function startWorkItemStore() {
     file: workItemStateFile(),
     onUpdate: broadcastWorkItemState,
   })
+  workItemSyncTimer = setInterval(syncWorkItemsInBackground, 180000)
+  workItemSyncTimer.unref?.()
+  setTimeout(syncWorkItemsInBackground, 5000).unref?.()
   return workItemStore
 }
 
+function syncWorkItemsInBackground() {
+  if (workItemSyncPending) return workItemSyncPending
+  const store = workItemStore || startWorkItemStore()
+  if (!store.getState().items.some(item => item.lark?.guid)) {
+    return Promise.resolve({ ok: true, results: [], state: store.getState() })
+  }
+  workItemSyncPending = store.syncAll()
+    .catch((error) => {
+      console.error(`[kodama] automatic Lark task sync failed: ${error?.message || error}`)
+      return { ok: false, error: error?.message || String(error), state: store.getState() }
+    })
+    .finally(() => {
+      workItemSyncPending = null
+    })
+  return workItemSyncPending
+}
+
 function createWorkItemFromAssistant(request = {}) {
+  ensureLarkAssistantResultsLoaded()
   const messageId = String(request.messageId || request.message_id || '').trim()
   const kind = request.kind === 'risk' ? 'risk' : 'todo'
   const index = Number(request.index)
@@ -739,6 +851,7 @@ function createLarkWorkbenchWindow() {
 
   if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
     showLarkWorkbenchWindow()
+    scheduleCurrentLarkAttentionAnalysis()
     return larkWorkbenchWin
   }
 
@@ -772,6 +885,8 @@ function createLarkWorkbenchWindow() {
     sendToLarkWorkbench('pet:lark-assistant-updated', larkAssistantState())
     sendToLarkWorkbench('pet:work-items-updated', startWorkItemStore().getState())
     sendToLarkWorkbench('pet:knowledge-updated', startKnowledgeHub().getState())
+    sendToLarkWorkbench('pet:lark-agenda-updated', startLarkAgenda().getState())
+    scheduleCurrentLarkAttentionAnalysis()
   })
   larkWorkbenchWin.webContents.on('did-fail-load', (_event, code, description) => {
     larkWorkbenchStatus = {
@@ -2388,6 +2503,14 @@ ipcMain.handle('pet:lark-assistant-analyze', async (_e, request) => {
   return analyzeLarkInboxMessage(request)
 })
 
+ipcMain.handle('pet:lark-agenda', () => {
+  return startLarkAgenda().getState()
+})
+
+ipcMain.handle('pet:lark-agenda-refresh', async () => {
+  return refreshLarkAgenda()
+})
+
 ipcMain.handle('pet:work-items-state', () => {
   return startWorkItemStore().getState()
 })
@@ -3120,12 +3243,16 @@ function startLocalAgentServer() {
         larkArchive: larkArchive?.getSummary?.() || null,
         larkBaseSink: larkBaseSink?.getSummary?.() || null,
         larkWebPush: larkWebPush?.getStatus?.() || null,
+        larkAgenda: larkAgenda?.getState?.() || null,
         larkAssistant: {
           resultCount: larkAssistantResults.size,
           pendingCount: larkAssistantPending.size,
+          autoQueueCount: larkAssistantAutoQueued.size,
           workbenchVisible: Boolean(larkWorkbenchWin && !larkWorkbenchWin.isDestroyed() && larkWorkbenchWin.isVisible()),
           workbenchStatus: larkWorkbenchStatus,
         },
+        workItems: workItemStore?.getState?.() || null,
+        knowledgeHub: knowledgeHub?.getState?.() || null,
         loginItemEnabled: isLoginItemEnabled(),
       })
       return
@@ -3548,6 +3675,7 @@ app.whenReady().then(() => {
   startLarkBaseSink()
   startLarkInbox()
   startLarkWebPush()
+  startLarkAgenda()
   startWorkItemStore()
   startKnowledgeHub()
   registerGlobalShortcuts()
@@ -3592,6 +3720,8 @@ app.on('will-quit', () => {
   larkInbox?.stop?.()
   larkBaseSink?.stop?.()
   larkWebPush?.stop?.()
+  if (larkAgendaTimer) clearInterval(larkAgendaTimer)
+  if (workItemSyncTimer) clearInterval(workItemSyncTimer)
   disposeAutoUpdater()
   globalShortcut.unregisterAll()
 })

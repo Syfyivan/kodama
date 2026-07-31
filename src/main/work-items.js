@@ -98,6 +98,24 @@ function taskFromPayload(payload) {
   return data?.task && typeof data.task === 'object' ? data.task : data
 }
 
+function verifiedLarkUserFromPayload(payload) {
+  const data = payload?.data?.identities ? payload.data : payload || {}
+  const user = data?.identities?.user || {}
+  const openId = String(user.openId || user.open_id || '').trim()
+  if (
+    data.identity !== 'user'
+    || data.verified !== true
+    || user.status !== 'ready'
+    || !openId
+  ) {
+    throw new Error('verified Lark user identity is required')
+  }
+  return {
+    openId,
+    userName: String(user.userName || user.user_name || '').trim(),
+  }
+}
+
 function isCompletedLarkTask(task) {
   const completedAt = String(task?.completed_at || task?.completedAt || '').trim()
   const status = String(task?.status || '').trim().toLowerCase()
@@ -114,7 +132,7 @@ function taskDescription(item) {
   ].filter(Boolean).join('\n\n')
 }
 
-function createLarkTaskArgs(item) {
+function createLarkTaskArgs(item, { assigneeOpenId = '' } = {}) {
   const args = [
     'task',
     '+create',
@@ -124,6 +142,7 @@ function createLarkTaskArgs(item) {
     item.title,
     '--description',
     taskDescription(item),
+    ...(assigneeOpenId ? ['--assignee', assigneeOpenId] : []),
     '--idempotency-key',
     `kodama-${item.id}`.slice(0, 60),
     '--format',
@@ -156,8 +175,26 @@ function createWorkItemStore(input = {}) {
   const larkCliBin = input.larkCliBin || 'lark-cli'
   const run = input.runJson || runJson
   const now = input.now || (() => new Date().toISOString())
+  const nowMs = input.nowMs || (() => Date.now())
+  const identityCacheMs = Math.max(0, Number(input.identityCacheMs ?? 300000))
   const makeId = input.makeId || (() => `wi_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`)
   let items = readStoreFile(file).map(normalizeLoadedItem).filter(item => item.id && item.title)
+  let verifiedUser = null
+  let verifiedUserAt = 0
+
+  async function ensureVerifiedLarkUser() {
+    const current = nowMs()
+    if (verifiedUser && current - verifiedUserAt <= identityCacheMs) return verifiedUser
+    const payload = await run(larkCliBin, [
+      'auth',
+      'status',
+      '--json',
+      '--verify',
+    ], { timeoutMs: 20000 })
+    verifiedUser = verifiedLarkUserFromPayload(payload)
+    verifiedUserAt = current
+    return verifiedUser
+  }
 
   function snapshot() {
     return {
@@ -234,7 +271,10 @@ function createWorkItemStore(input = {}) {
     if (item.lark?.guid) return { ok: true, created: false, item: structuredClone(item) }
     patch(id, { lark: { status: 'creating', error: '' } })
     try {
-      const payload = await run(larkCliBin, createLarkTaskArgs(item))
+      const user = await ensureVerifiedLarkUser()
+      const payload = await run(larkCliBin, createLarkTaskArgs(item, {
+        assigneeOpenId: user.openId,
+      }))
       const task = taskFromPayload(payload)
       const guid = String(task?.guid || task?.task_guid || task?.taskGuid || '').trim()
       if (!guid) throw new Error('lark task creation did not return a guid')
@@ -260,6 +300,7 @@ function createWorkItemStore(input = {}) {
     if (!item) return { ok: false, error: 'work-item-not-found' }
     if (!item.lark?.guid) return { ok: false, error: 'lark-task-not-created' }
     try {
+      await ensureVerifiedLarkUser()
       const payload = await run(larkCliBin, [
         'task',
         'tasks',
@@ -303,6 +344,7 @@ function createWorkItemStore(input = {}) {
     if (!item) return { ok: false, error: 'work-item-not-found' }
     if (item.lark?.guid) {
       try {
+        await ensureVerifiedLarkUser()
         await run(larkCliBin, [
           'task',
           completed ? '+complete' : '+reopen',
@@ -340,6 +382,7 @@ function createWorkItemStore(input = {}) {
     },
     getState: snapshot,
     patch,
+    verifyLarkUser: ensureVerifiedLarkUser,
     setCompleted,
     syncAll,
     syncLarkTask,
@@ -355,4 +398,5 @@ module.exports = {
   normalizeDueForCli,
   normalizePriority,
   taskFromPayload,
+  verifiedLarkUserFromPayload,
 }

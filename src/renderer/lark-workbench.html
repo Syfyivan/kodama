@@ -20,6 +20,7 @@
           <input id="attention-only" type="checkbox" checked />
           <span>只看私聊 / @我</span>
         </label>
+        <button id="toggle-agenda" class="secondary" type="button">会议 0</button>
         <button id="toggle-work-items" class="secondary" type="button">工作项 0</button>
         <button id="toggle-knowledge" class="secondary" type="button">知识库 0</button>
         <button id="refresh-inbox" class="secondary" type="button">刷新消息</button>
@@ -42,6 +43,21 @@
         </div>
       </section>
     </main>
+
+    <aside id="agenda-drawer" class="work-item-drawer agenda-drawer" hidden aria-label="近期会议">
+      <div class="work-item-drawer-head">
+        <div>
+          <p class="eyebrow">CALENDAR</p>
+          <h2>近期会议</h2>
+          <p id="agenda-status">正在读取飞书日程…</p>
+        </div>
+        <div class="work-item-drawer-actions">
+          <button id="refresh-agenda" class="secondary" type="button">刷新日程</button>
+          <button id="close-agenda" class="quiet" type="button" aria-label="关闭近期会议">关闭</button>
+        </div>
+      </div>
+      <div id="agenda-list" class="work-item-list agenda-list empty">暂无近期会议</div>
+    </aside>
 
     <aside id="work-item-drawer" class="work-item-drawer" hidden aria-label="工作项">
       <div class="work-item-drawer-head">

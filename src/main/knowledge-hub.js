@@ -11,7 +11,7 @@ function compactText(value, max = 4000) {
 }
 
 function stripHighlight(value) {
-  return compactText(String(value || '').replace(/<\/?h>/gi, ''), 4000)
+  return compactText(stripHtml(String(value || '').replace(/<\/?h>/gi, '')), 4000)
 }
 
 function stripHtml(value) {

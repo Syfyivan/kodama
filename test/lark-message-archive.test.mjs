@@ -11,6 +11,7 @@ const {
   normalizeArchiveMessage,
 } = require('../src/main/lark-message-archive.js')
 const {
+  baseSinkTargetId,
   baseUrlFor,
   baseRecordFields,
   createLarkBaseSink,
@@ -106,6 +107,49 @@ test('base sink exposes an openable Base URL', () => {
   )
 })
 
+test('base sink preserves an unscoped legacy state on an ordinary upgrade', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kodama-lark-base-state-'))
+  const stateFile = join(dir, 'state.json')
+  writeFileSync(stateFile, JSON.stringify({
+    version: 1,
+    synced: { om_existing: { at: '2026-07-31T00:00:00.000Z' } },
+  }))
+  const sink = createLarkBaseSink({
+    enabled: true,
+    baseToken: 'base_1',
+    tableId: 'tbl_1',
+    stateFile,
+    flushIntervalMs: 60 * 1000,
+  })
+  assert.equal(sink.getSummary().syncedCount, 1)
+  assert.equal(sink.ingest([{ messageId: 'om_existing' }]).length, 0)
+  const persisted = JSON.parse(readFileSync(stateFile, 'utf8'))
+  assert.equal(persisted.version, 2)
+  assert.equal(persisted.targetId, baseSinkTargetId({ baseToken: 'base_1', tableId: 'tbl_1' }))
+  sink.stop()
+})
+
+test('base sink resets legacy dedupe state when setup binds a replacement Base', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kodama-lark-base-state-'))
+  const stateFile = join(dir, 'state.json')
+  writeFileSync(stateFile, JSON.stringify({
+    version: 1,
+    synced: { om_existing: { at: '2026-07-31T00:00:00.000Z' } },
+  }))
+  const target = { baseToken: 'base_2', tableId: 'tbl_2' }
+  const sink = createLarkBaseSink({
+    enabled: true,
+    ...target,
+    syncTargetId: baseSinkTargetId(target),
+    stateFile,
+    flushIntervalMs: 60 * 1000,
+  })
+  assert.equal(sink.getSummary().syncedCount, 0)
+  assert.equal(sink.ingest([{ messageId: 'om_existing' }]).length, 1)
+  assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).targetId, baseSinkTargetId(target))
+  sink.stop()
+})
+
 test('base sink keeps a failed record queued for retry', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'kodama-lark-base-'))
   const marker = join(dir, 'count.txt')
@@ -134,6 +178,7 @@ test('base sink keeps a failed record queued for retry', async () => {
       stateFile: join(dir, 'state.json'),
       larkCliBin: fakeCli,
       flushIntervalMs: 60 * 1000,
+      minWriteIntervalMs: 0,
     })
     sink.ingest([{
       messageId: 'om_retry',

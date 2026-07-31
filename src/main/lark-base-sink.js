@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const { createHash } = require('crypto')
 const { spawn } = require('child_process')
 
 const DEFAULT_BASE_SINK_OPTIONS = Object.freeze({
@@ -9,6 +10,7 @@ const DEFAULT_BASE_SINK_OPTIONS = Object.freeze({
   larkCliBin: 'lark-cli',
   commandTimeoutMs: 20 * 1000,
   flushIntervalMs: 5 * 1000,
+  minWriteIntervalMs: 750,
   maxQueue: 2000,
 })
 
@@ -47,13 +49,25 @@ function readBaseSinkOptions(input = {}) {
     enabled: configuredEnabled && Boolean(baseToken),
     baseToken,
     tableId: String(process.env.KODAMA_LARK_BASE_TABLE || input.tableId || config.tableId || DEFAULT_BASE_SINK_OPTIONS.tableId),
+    syncTargetId: String(input.syncTargetId || config.syncTargetId || '').trim(),
     url: String(process.env.KODAMA_LARK_BASE_URL || input.url || config.url || ''),
     domain: String(process.env.KODAMA_LARK_BASE_DOMAIN || input.domain || config.domain || DEFAULT_BASE_SINK_OPTIONS.domain),
     larkCliBin: String(input.larkCliBin || DEFAULT_BASE_SINK_OPTIONS.larkCliBin),
     commandTimeoutMs: clampInt(input.commandTimeoutMs, 5 * 1000, 120 * 1000, DEFAULT_BASE_SINK_OPTIONS.commandTimeoutMs),
     flushIntervalMs: clampInt(input.flushIntervalMs, 1 * 1000, 60 * 1000, DEFAULT_BASE_SINK_OPTIONS.flushIntervalMs),
+    minWriteIntervalMs: clampInt(input.minWriteIntervalMs, 0, 5 * 1000, DEFAULT_BASE_SINK_OPTIONS.minWriteIntervalMs),
     maxQueue: clampInt(input.maxQueue, 100, 10000, DEFAULT_BASE_SINK_OPTIONS.maxQueue),
   }
+}
+
+function baseSinkTargetId(options = {}) {
+  const baseToken = String(options.baseToken || '').trim()
+  const tableId = String(options.tableId || '').trim()
+  if (!baseToken) return ''
+  return createHash('sha256')
+    .update(`${baseToken}\u0000${tableId}`)
+    .digest('hex')
+    .slice(0, 24)
 }
 
 function baseUrlFor(options) {
@@ -150,11 +164,27 @@ function runJson(command, args, { timeout = DEFAULT_BASE_SINK_OPTIONS.commandTim
 function createLarkBaseSink(input = {}) {
   const options = readBaseSinkOptions(input)
   let state = readState(options.stateFile || '')
+  const targetId = baseSinkTargetId(options)
+  const stateTargetId = String(state.targetId || '')
+  const explicitlyScoped = Boolean(targetId && options.syncTargetId === targetId)
+  const targetChanged = Boolean(stateTargetId && targetId && stateTargetId !== targetId)
+  const legacyStateMustReset = Boolean(!stateTargetId && targetId && explicitlyScoped)
+  if (targetChanged || legacyStateMustReset) {
+    state = { version: 2, targetId, synced: {} }
+    writeStateAtomic(options.stateFile, state)
+  } else if (targetId && stateTargetId !== targetId) {
+    // Adopt an unscoped legacy state when no setup marker says the Base was
+    // replaced. This avoids replaying an existing archive on ordinary upgrades.
+    state.version = 2
+    state.targetId = targetId
+    writeStateAtomic(options.stateFile, state)
+  }
   if (!state.synced || typeof state.synced !== 'object') state.synced = {}
   let queue = []
   let timer = null
   let flushing = false
   let lastError = ''
+  let lastWriteStartedAt = 0
   let syncedCount = Object.keys(state.synced).length
 
   function persist() {
@@ -171,6 +201,9 @@ function createLarkBaseSink(input = {}) {
   }
 
   async function writeOne(message) {
+    const waitMs = options.minWriteIntervalMs - (Date.now() - lastWriteStartedAt)
+    if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs))
+    lastWriteStartedAt = Date.now()
     const result = await runJson(options.larkCliBin, [
       'base',
       '+record-upsert',
@@ -188,6 +221,7 @@ function createLarkBaseSink(input = {}) {
       recordId: result?.data?.record?.record_id || result?.record?.record_id || result?.record_id || '',
     }
     syncedCount += 1
+    lastError = ''
     persist()
     return result
   }
@@ -247,6 +281,7 @@ function createLarkBaseSink(input = {}) {
       baseTokenConfigured: Boolean(options.baseToken),
       configFile: options.configFile || '',
       tableId: options.tableId,
+      minWriteIntervalMs: options.minWriteIntervalMs,
       url: baseUrlFor(options),
       queueLength: queue.length,
       flushing,
@@ -260,6 +295,7 @@ function createLarkBaseSink(input = {}) {
 
 module.exports = {
   DEFAULT_BASE_SINK_OPTIONS,
+  baseSinkTargetId,
   baseUrlFor,
   baseRecordFields,
   createLarkBaseSink,

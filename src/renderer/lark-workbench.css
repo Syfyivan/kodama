@@ -408,9 +408,9 @@ button:hover:not(:disabled) {
 
 .extraction-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  gap: 10px;
+  gap: 7px;
 }
 
 .extraction-row > span {
@@ -429,6 +429,18 @@ button:hover:not(:disabled) {
   font-size: 10px;
   font-weight: 750;
   white-space: nowrap;
+}
+
+.extraction-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.mini-action.primary-mini {
+  border-color: #315bd6;
+  background: #315bd6;
+  color: #fff;
 }
 
 .reply-section {
@@ -523,6 +535,37 @@ button:hover:not(:disabled) {
   border-radius: 12px;
   background: #fff;
   box-shadow: 0 5px 16px rgba(37, 52, 81, 0.06);
+}
+
+.agenda-card {
+  margin-bottom: 11px;
+  padding: 15px;
+  border: 1px solid #e0e6ef;
+  border-left: 4px solid #6a8ce6;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(37, 52, 81, 0.06);
+}
+
+.agenda-card strong {
+  display: block;
+  margin-top: 4px;
+  color: #243149;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agenda-card p,
+.agenda-time {
+  margin: 6px 0 0;
+  color: #7b889a;
+  font-size: 10.5px;
+}
+
+.agenda-time {
+  margin: 0;
+  color: #315bd6;
+  font-weight: 750;
 }
 
 .work-item-card[data-priority="critical"] {

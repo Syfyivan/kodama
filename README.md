@@ -38,6 +38,7 @@ pnpm start
 - 支持声音/系统通知独立开关；重要事件默认有系统通知和短提示音
 - 事件面板用 tab 分区，顶部「待交互 / 已完成 / 事件」数字可直接切到对应列表
 - 事件面板和菜单栏都有 **Bridge 任务详情**入口：读取 bridge `/task-viewer/tasks.json`，显示任务列表、prompt、最终回复、错误、token、cwd、飞书 chat/message 和完整公开进度时间线
+- 独立的 **飞书消息工作台**会聚合私聊和 @ 我的消息，自动生成总结、上下文理解、相关文档、待办、风险点和可编辑回复草稿；待办可一键转飞书任务或交给 Agent
 - 支持跨显示器拖动；仍会保证桌宠至少部分可见，不会完全丢出所有屏幕
 - **菜单栏 Kodama** → 显示/隐藏、事件 / 配置面板、Bridge 任务详情、勿扰、开机自启、番茄钟、大小、配饰、退出；找不到菜单栏入口时可按 `⌘⌥K` 显示/隐藏、`⌘⌥P` 打开面板，或在本仓库运行 `pnpm run show`
 
@@ -50,6 +51,7 @@ pnpm start
 | **P0** | 透明置顶窗 + Live2D 模型 + 待机动画 + 拖动 + 点击穿透 | ✅ |
 | **P1** | 飞书机器人联动：订阅 `lark-codex-bridge` 的 `/pet/events`(SSE)，把收消息/起任务/进度/回复/完成/失败同步成动作+气泡 | ✅ |
 | **P1.5** | 飞书群消息 inbox：`lark-cli --as user` 稳定轮询 + Feishu Web push 实时通道，面板「群聊」表格展示最近消息 | ✅ |
+| **P1.6** | 飞书消息工作台：私聊/@我自动理解与回复草稿、一键飞书任务/Agent、任务双向同步、ByteTech/GitHub/飞书文档/X 收集与个人知识库 | ✅ |
 | **P2** | ✅ JSON 动作表 + 来源标签 + 气泡优先级 + 渲染栈/模型本地化(`pnpm run setup`)；⏳ 行为状态机/命中分区 | 🚧 |
 | **P3** | ✅ 本地 Claude Code/Codex hook 接收(`source:local`) + 测试/构建/Git 细分事件；⏳ 插件化 | 🚧 |
 | **P4** | ✅ 养成核心 + 本地 token 统计/喂食 + 可配置番茄钟/久坐提醒 + 跨源 token 归账 + 配饰/等级解锁 + 打包脚本；⏳ 正式签名/跨平台实机验证 | 🚧 |
@@ -107,7 +109,21 @@ Bridge 事件只覆盖「机器人收到/处理的消息」。如果要看你本
 pnpm run lark:base:setup
 ```
 
-这个脚本会用 `lark-cli base` 创建「Kodama 飞书群消息归档」Base 和「最近群消息」表，默认视图为「最近消息」并按时间倒序，另带「按群查看」分组视图。字段顺序优先给人查看：时间、群名、发送人、内容、来源、类型；消息ID、chat_id、sender_id、thread_id、归档时间会保留在表内用于检索和排查，但默认在两个视图里隐藏。脚本会把配置写入 Electron userData 的 `kodama-lark-base-config.json`。如果本机已经绑定过配置，脚本会直接退出；确实要新建并覆盖绑定时再加 `-- --force`。重启 Kodama 后，新的归档消息会异步写入该多维表格。先看请求形状可跑 `pnpm run lark:base:setup -- --dry-run`。
+这个脚本会用 `lark-cli base` 创建「Kodama 飞书群消息归档」Base 和「最近群消息」表，默认视图为「最近消息」并按时间倒序，另带「按群查看」分组视图。字段顺序优先给人查看：时间、群名、发送人、内容、来源、类型；消息ID、chat_id、sender_id、thread_id、归档时间会保留在表内用于检索和排查，但默认在两个视图里隐藏。脚本会把配置写入 Electron userData 的 `kodama-lark-base-config.json`。如果本机已经绑定过配置，脚本会直接退出；确实要新建并覆盖绑定时再加 `-- --force`，旧同步状态会先备份，新表会重新回填最近 2,000 条本地归档。若建表已经成功、只需恢复本地绑定，可加 `--bind-only --base-token ... --table-id ... --reset-sync-state`。重启 Kodama 后，新的归档消息会异步写入该多维表格。先看请求形状可跑 `pnpm run lark:base:setup -- --dry-run`。
+
+## 飞书消息工作台
+
+运行 `pnpm run workbench`，或从桌宠面板 / 菜单栏打开「飞书消息工作台」：
+
+- 默认只列出私聊和 @ 我的群消息。新出现的需处理消息会按顺序自动交给本机 Bridge 分析；也可以点「重新理解」刷新结果。
+- 分析会带上同一会话最近上下文，并允许 Agent 按需只读检索相关飞书文档或 ByteTech 内容。消息正文会按不可信数据处理，不能覆盖 Agent 的安全边界。
+- 总结、意图、相关文档、待办、风险和回复草稿集中展示。草稿可以继续编辑；「应用到飞书输入框」只负责打开原会话并粘贴，**不会替你发送**。
+- 每个待办或风险点都能直接一键「飞书任务」「Agent 计划」或「Agent 执行」，无需先到工作项抽屉二次操作。
+- 工作项保留 `critical / high / medium / low` 本地优先级；创建飞书任务时会写进任务描述并明确分配给当前登录用户。远端完成或重新打开会自动同步回 Kodama，Kodama 的完成 / 重新打开也会同步到飞书。
+- 顶部「会议」会读取当前用户未来 7 天的飞书日程，可直接打开日程或加入视频会议；每 30 分钟自动刷新。
+- 「个人知识库」支持 ByteTech 检索、GitHub 近 7 天热门项目、飞书文档搜索、打开 X、从剪贴板收集推文/链接，以及随手记录想法；收藏后可交给 Agent 总结并生成标签。
+
+任务写入和飞书文档读取都固定使用 `lark-cli --as user`。Kodama 会先验证当前有效身份，无法确认用户身份时会停止写入，不会回退成 bot。消息分析结果、工作项和知识库分别保存在 Electron `userData` 下的 `kodama-lark-assistant.json`、`kodama-work-items.json` 和 `kodama-knowledge-hub.json`。
 
 如果要看飞书机器人一次任务的完整过程，打开「Bridge 任务详情」：
 
@@ -180,6 +196,7 @@ curl http://127.0.0.1:8787/pet/state        # bridge → Kodama SSE 状态
 pnpm run show       # 显示桌宠；如果桌宠没启动，会先启动
 pnpm run panel      # 显示桌宠并打开事件 / 配置面板
 pnpm run bridge-tasks # 打开 Bridge 完整任务详情页
+pnpm run workbench  # 打开飞书消息工作台
 pnpm run hide       # 隐藏桌宠
 pnpm run toggle     # 显示/隐藏切换
 pnpm run tokens     # 查看本地+飞书 token 合并账本
