@@ -15,10 +15,18 @@ const TERMINAL_STATUSES = new Set(['done', 'failed', 'cancelled'])
 const MAX_TASKS = 90
 const MAX_SESSIONS_PER_TASK = 24
 const MAX_STEPS_PER_SESSION = 12
+const MAX_TODOS_PER_TASK = 40
 
 function compactText(value, max = 160) {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+function clampProgress(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number)
+    ? Math.min(100, Math.max(0, Math.round(number)))
+    : fallback
 }
 
 function redactSensitiveText(value, max = 240) {
@@ -324,7 +332,7 @@ function aggregateTask(task) {
   const runningSessions = sessions.filter(session => session.status === 'running').length
   const waitingSessions = sessions.filter(session => session.status === 'waiting').length
   const failedSessions = sessions.filter(session => session.status === 'failed').length
-  const status = waitingSessions
+  const sessionStatus = waitingSessions
     ? 'waiting'
     : runningSessions
       ? 'running'
@@ -333,22 +341,43 @@ function aggregateTask(task) {
         : sessions.length && doneSessions === sessions.length
           ? 'done'
           : 'idle'
-  const progress = sessions.length
+  const sessionProgress = sessions.length
     ? Math.round(sessions.reduce((total, session) => total + Number(session.progress || 0), 0) / sessions.length)
     : 0
+  const customGroup = task.customGroup === true || task.manualTitle === true
+  const migratedManualProgress = customGroup
+    ? clampProgress(task.manualProgress, clampProgress(task.progress, 0))
+    : null
+  const progress = customGroup ? migratedManualProgress : sessionProgress
+  const status = customGroup
+    ? progress >= 100
+      ? 'done'
+      : progress > 0 || sessions.length
+        ? 'running'
+        : 'idle'
+    : sessionStatus
   const latest = sessions.slice().sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))[0]
+  const taskUpdatedAt = (Date.parse(task.updatedAt || '') || 0) >= (Date.parse(latest?.updatedAt || '') || 0)
+    ? task.updatedAt
+    : latest?.updatedAt
+  const todos = (Array.isArray(task.todos) ? task.todos : []).slice(-MAX_TODOS_PER_TASK)
   return {
     ...task,
+    customGroup,
+    manualProgress: customGroup ? progress : undefined,
     sessions,
+    todos,
     status,
-    progress: status === 'done' ? 100 : progress,
+    progress,
     currentStep: latest?.currentStep || '',
     sessionCount: sessions.length,
     doneSessions,
     runningSessions,
     waitingSessions,
     failedSessions,
-    updatedAt: latest?.updatedAt || task.updatedAt,
+    todoCount: todos.length,
+    openTodoCount: todos.filter(todo => todo.done !== true).length,
+    updatedAt: taskUpdatedAt || task.createdAt,
   }
 }
 
@@ -357,6 +386,7 @@ function createAgentTaskBoard(options = {}) {
   if (!file) throw new Error('agent task board file is required')
   const now = options.now || (() => new Date().toISOString())
   const makeId = options.makeId || (() => `at_${randomUUID()}`)
+  const makeTodoId = options.makeTodoId || (() => `todo_${randomUUID()}`)
   const persistDelayMs = Number.isFinite(options.persistDelayMs) ? options.persistDelayMs : 160
   let state = readState(file)
   let persistTimer = null
@@ -391,14 +421,17 @@ function createAgentTaskBoard(options = {}) {
     return null
   }
 
-  function createTask(title, timestamp, id = '', manualTitle = false) {
+  function createTask(title, timestamp, id = '', manualTitle = false, customGroup = false) {
     const task = {
       id: id || makeId(),
       title: compactText(title, 120) || '未命名任务',
       manualTitle,
+      customGroup,
+      manualProgress: customGroup ? 0 : undefined,
       createdAt: timestamp,
       updatedAt: timestamp,
       sessions: [],
+      todos: [],
     }
     state.tasks.unshift(task)
     return task
@@ -406,7 +439,11 @@ function createAgentTaskBoard(options = {}) {
 
   function recompute() {
     state.tasks = state.tasks
-      .filter(task => Array.isArray(task.sessions) && task.sessions.length)
+      .filter(task => (
+        (Array.isArray(task.sessions) && task.sessions.length)
+        || task.customGroup === true
+        || task.manualTitle === true
+      ))
       .map(aggregateTask)
       .sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
       .slice(0, MAX_TASKS)
@@ -450,11 +487,13 @@ function createAgentTaskBoard(options = {}) {
     return {
       taskId: aggregate.id,
       taskTitle: aggregate.title,
+      customGroup: aggregate.customGroup === true,
       status: aggregate.status,
       percent: aggregate.progress,
       currentStep: aggregate.currentStep,
       sessionKey: session.key,
       sessionTitle: session.title,
+      ignored: session.ignored === true,
       sessionStatus: session.status,
       sessionPercent: session.progress,
       sessionCount: aggregate.sessionCount,
@@ -611,8 +650,13 @@ function createAgentTaskBoard(options = {}) {
     if (!found) return { ok: false, error: 'session-not-found', state: snapshot() }
     const timestamp = now()
     let target = request.taskId ? findTask(compactText(request.taskId, 160)) : null
-    if (!target && request.title) target = createTask(redactSensitiveText(request.title, 120), timestamp, '', true)
+    if (!target && request.title) {
+      target = createTask(redactSensitiveText(request.title, 120), timestamp, '', true, true)
+    }
     if (!target) return { ok: false, error: 'task-not-found', state: snapshot() }
+    if (target.customGroup !== true && target.manualTitle !== true) {
+      target.manualProgress = 0
+    }
     if (found.task.id !== target.id) {
       found.task.sessions = found.task.sessions.filter(session => session.key !== key)
       target.sessions.push(found.session)
@@ -620,6 +664,8 @@ function createAgentTaskBoard(options = {}) {
       found.task.updatedAt = timestamp
     }
     target.manualTitle = true
+    target.customGroup = true
+    target.updatedAt = timestamp
     state.assignments[key] = target.id
     recompute()
     schedulePersist()
@@ -631,8 +677,129 @@ function createAgentTaskBoard(options = {}) {
     const title = redactSensitiveText(request.title, 120)
     if (!task) return { ok: false, error: 'task-not-found', state: snapshot() }
     if (!title) return { ok: false, error: 'missing-task-title', state: snapshot() }
+    if (task.customGroup !== true && task.manualTitle !== true) task.manualProgress = 0
     task.title = title
     task.manualTitle = true
+    task.customGroup = true
+    task.updatedAt = now()
+    recompute()
+    schedulePersist()
+    return { ok: true, taskId: task.id, state: snapshot() }
+  }
+
+  function createGroup(request = {}) {
+    const title = redactSensitiveText(request.title, 120)
+    if (!title) return { ok: false, error: 'missing-task-title', state: snapshot() }
+    const timestamp = now()
+    const task = createTask(title, timestamp, '', true, true)
+    recompute()
+    schedulePersist()
+    return { ok: true, taskId: task.id, state: snapshot() }
+  }
+
+  function setTaskProgress(request = {}) {
+    const task = findTask(compactText(request.taskId, 160))
+    if (!task) return { ok: false, error: 'task-not-found', state: snapshot() }
+    if (task.customGroup !== true && task.manualTitle !== true) {
+      return { ok: false, error: 'not-custom-group', state: snapshot() }
+    }
+    task.manualProgress = clampProgress(request.progress, task.manualProgress || 0)
+    task.updatedAt = now()
+    recompute()
+    schedulePersist()
+    return { ok: true, taskId: task.id, state: snapshot() }
+  }
+
+  function detachSession(request = {}) {
+    const key = compactText(request.sessionKey, 1400)
+    if (!key) return { ok: false, error: 'missing-session-key', state: snapshot() }
+    const found = findSession(key)
+    if (!found) return { ok: false, error: 'session-not-found', state: snapshot() }
+    if (found.task.sessions.length === 1 && found.task.customGroup !== true) {
+      return { ok: true, taskId: found.task.id, state: snapshot() }
+    }
+    const timestamp = now()
+    found.task.sessions = found.task.sessions.filter(session => session.key !== key)
+    found.task.updatedAt = timestamp
+    const target = createTask(found.session.title || '未命名任务', timestamp)
+    target.sessions.push(found.session)
+    state.assignments[key] = target.id
+    recompute()
+    schedulePersist()
+    return { ok: true, taskId: target.id, state: snapshot() }
+  }
+
+  function deleteGroup(request = {}) {
+    const task = findTask(compactText(request.taskId, 160))
+    if (!task) return { ok: false, error: 'task-not-found', state: snapshot() }
+    if (task.customGroup !== true && task.manualTitle !== true) {
+      return { ok: false, error: 'not-custom-group', state: snapshot() }
+    }
+    const timestamp = now()
+    for (const session of task.sessions || []) {
+      const target = createTask(session.title || '未命名任务', timestamp)
+      target.sessions.push(session)
+      state.assignments[session.key] = target.id
+    }
+    state.tasks = state.tasks.filter(item => item.id !== task.id)
+    recompute()
+    schedulePersist()
+    return { ok: true, state: snapshot() }
+  }
+
+  function setSessionIgnored(request = {}) {
+    const key = compactText(request.sessionKey, 1400)
+    if (!key) return { ok: false, error: 'missing-session-key', state: snapshot() }
+    const found = findSession(key)
+    if (!found) return { ok: false, error: 'session-not-found', state: snapshot() }
+    found.session.ignored = request.ignored !== false
+    found.task.updatedAt = now()
+    recompute()
+    schedulePersist()
+    return { ok: true, state: snapshot() }
+  }
+
+  function addTodo(request = {}) {
+    const task = findTask(compactText(request.taskId, 160))
+    const text = redactSensitiveText(request.text, 180)
+    if (!task) return { ok: false, error: 'task-not-found', state: snapshot() }
+    if (!text) return { ok: false, error: 'missing-todo-text', state: snapshot() }
+    const timestamp = now()
+    if (!Array.isArray(task.todos)) task.todos = []
+    task.todos.push({
+      id: makeTodoId(),
+      text,
+      done: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    task.todos = task.todos.slice(-MAX_TODOS_PER_TASK)
+    task.updatedAt = timestamp
+    recompute()
+    schedulePersist()
+    return { ok: true, taskId: task.id, state: snapshot() }
+  }
+
+  function updateTodo(request = {}) {
+    const task = findTask(compactText(request.taskId, 160))
+    if (!task) return { ok: false, error: 'task-not-found', state: snapshot() }
+    const todo = (task.todos || []).find(item => item.id === compactText(request.todoId, 160))
+    if (!todo) return { ok: false, error: 'todo-not-found', state: snapshot() }
+    todo.done = request.done === true
+    todo.updatedAt = now()
+    task.updatedAt = todo.updatedAt
+    recompute()
+    schedulePersist()
+    return { ok: true, taskId: task.id, state: snapshot() }
+  }
+
+  function deleteTodo(request = {}) {
+    const task = findTask(compactText(request.taskId, 160))
+    if (!task) return { ok: false, error: 'task-not-found', state: snapshot() }
+    const todoId = compactText(request.todoId, 160)
+    const before = Array.isArray(task.todos) ? task.todos.length : 0
+    task.todos = (task.todos || []).filter(item => item.id !== todoId)
+    if (task.todos.length === before) return { ok: false, error: 'todo-not-found', state: snapshot() }
     task.updatedAt = now()
     recompute()
     schedulePersist()
@@ -640,11 +807,19 @@ function createAgentTaskBoard(options = {}) {
   }
 
   return {
+    addTodo,
     assignSession,
+    createGroup,
+    deleteGroup,
+    deleteTodo,
+    detachSession,
     flush: persist,
     getState: snapshot,
     record,
     renameTask,
+    setSessionIgnored,
+    setTaskProgress,
+    updateTodo,
   }
 }
 

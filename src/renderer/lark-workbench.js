@@ -10,6 +10,7 @@ const toggleAgentTasksButton = document.getElementById('toggle-agent-tasks')
 const agentTaskDrawer = document.getElementById('agent-task-drawer')
 const agentTaskStatus = document.getElementById('agent-task-status')
 const agentTaskList = document.getElementById('agent-task-list')
+const createAgentTaskButton = document.getElementById('create-agent-task')
 const refreshAgentTasksButton = document.getElementById('refresh-agent-tasks')
 const closeAgentTasksButton = document.getElementById('close-agent-tasks')
 const toggleAgendaButton = document.getElementById('toggle-agenda')
@@ -399,78 +400,127 @@ function agentTaskStatusLabel(value) {
   }[value] || value || '未知'
 }
 
-function agentSessionGroupOptions(currentTaskId) {
+function userAgentTasks() {
+  return state.agentTasks.todayTasks.filter(task => task.customGroup === true)
+}
+
+function looseAgentSessions() {
+  return state.agentTasks.todayTasks
+    .filter(task => task.customGroup !== true)
+    .flatMap(task => (task.sessions || []).map(session => ({ task, session })))
+    .sort((a, b) => (
+      Number(new Set(['done', 'cancelled']).has(a.session.status))
+      - Number(new Set(['done', 'cancelled']).has(b.session.status))
+      || Date.parse(b.session.updatedAt || '') - Date.parse(a.session.updatedAt || '')
+    ))
+}
+
+function agentSessionGroupOptions(currentTaskId = '') {
+  const tasks = userAgentTasks()
+  const currentIsTask = tasks.some(task => task.id === currentTaskId)
   return [
-    `<option value="${escapeHtml(currentTaskId)}">当前任务</option>`,
-    ...state.agentTasks.todayTasks
+    currentIsTask
+      ? `<option value="${escapeHtml(currentTaskId)}">当前任务</option>`
+      : '<option value="" selected disabled>加入任务…</option>',
+    ...tasks
       .filter(task => task.id !== currentTaskId)
       .map(task => `<option value="${escapeHtml(task.id)}">移到：${escapeHtml(shortText(task.title, 42))}</option>`),
-    '<option value="__new__">＋ 新建任务组…</option>',
+    currentIsTask ? '<option value="__loose__">移到待归组</option>' : '',
+    '<option value="__new__">＋ 新建任务…</option>',
+  ].join('')
+}
+
+function agentSessionCardHtml(session, currentTaskId = '', { steps = true } = {}) {
+  const recentSteps = steps && Array.isArray(session.steps) ? session.steps.slice(-3).reverse() : []
+  return [
+    `<section class="agent-session-card${session.ignored ? ' ignored' : ''}">`,
+    '<div class="agent-session-head">',
+    '<div>',
+    `<strong>${escapeHtml(session.title || session.agent || 'Session')}</strong>`,
+    `<p>${escapeHtml(agentTaskStatusLabel(session.status))}${session.agent ? ` · ${escapeHtml(session.agent)}` : ''}${session.app ? ` · ${escapeHtml(session.app)}` : ''}${session.ignored ? ' · 已隐藏' : ''}</p>`,
+    '</div>',
+    '<div class="agent-session-actions">',
+    session.target ? `<button type="button" data-agent-session-open="${escapeHtml(session.key)}">打开</button>` : '',
+    `<button type="button" data-agent-session-visibility="${escapeHtml(session.key)}" data-ignored="${session.ignored === true ? 'true' : 'false'}">${session.ignored ? '显示' : '忽略'}</button>`,
+    `<select data-agent-session-group="${escapeHtml(session.key)}" data-current-task="${escapeHtml(currentTaskId)}" aria-label="调整 Session 所属任务">${agentSessionGroupOptions(currentTaskId)}</select>`,
+    '</div>',
+    '</div>',
+    session.currentStep ? `<p class="agent-session-current">${escapeHtml(session.currentStep)}</p>` : '',
+    recentSteps.length
+      ? `<ol class="agent-session-steps">${recentSteps.map(step => `<li><time>${escapeHtml(fmtTime(step.at))}</time><span>${escapeHtml(step.text)}</span></li>`).join('')}</ol>`
+      : '',
+    '</section>',
   ].join('')
 }
 
 function renderAgentTasks() {
-  const tasks = state.agentTasks.todayTasks.slice().sort((a, b) => (
-    ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[a.status] ?? 9)
-    - ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[b.status] ?? 9)
+  const tasks = userAgentTasks().slice().sort((a, b) => (
+    Number(a.progress >= 100) - Number(b.progress >= 100)
     || Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || '')
   ))
-  const counts = state.agentTasks.counts
-  toggleAgentTasksButton.textContent = `Agent 任务 ${tasks.length}`
+  const loose = looseAgentSessions()
+  const running = tasks.filter(task => task.status === 'running').length
+  const done = tasks.filter(task => task.status === 'done').length
+  toggleAgentTasksButton.textContent = `我的任务 ${tasks.length}`
   toggleAgentTasksButton.classList.toggle('primary', state.agentTaskDrawerOpen)
   toggleAgentTasksButton.classList.toggle('secondary', !state.agentTaskDrawerOpen)
   agentTaskDrawer.hidden = !state.agentTaskDrawerOpen
-  agentTaskStatus.textContent = `${counts.running} 个进行中 · ${counts.waiting} 个等待 · ${counts.done} 个完成${state.agentTasks.updatedAt ? ` · ${fmtTime(state.agentTasks.updatedAt)}` : ''}`
+  agentTaskStatus.textContent = `${running} 个进行中 · ${done} 个完成 · ${loose.length} 个待归组 Session${state.agentTasks.updatedAt ? ` · ${fmtTime(state.agentTasks.updatedAt)}` : ''}`
 
-  if (!tasks.length) {
+  if (!tasks.length && !loose.length) {
     agentTaskList.className = 'agent-task-list empty'
-    agentTaskList.textContent = 'Agent 开始工作后，会按任务持续记录 Session 和当前步骤'
+    agentTaskList.textContent = '先新建今天要完成的任务，再把相关 Session 归入其中'
     return
   }
   agentTaskList.className = 'agent-task-list'
-  agentTaskList.innerHTML = tasks.map((task) => {
+  const taskCards = tasks.map((task) => {
     const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
     const sessions = Array.isArray(task.sessions) ? task.sessions.slice() : []
+    const todos = Array.isArray(task.todos) ? task.todos : []
     sessions.sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
     return [
       `<article class="agent-task-card" data-status="${escapeHtml(task.status)}">`,
       '<div class="agent-task-title-row">',
       '<div>',
       `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
-      `<p>${escapeHtml(agentTaskStatusLabel(task.status))} · ${task.doneSessions || 0}/${task.sessionCount || sessions.length} Session 完成</p>`,
+      `<p>${escapeHtml(agentTaskStatusLabel(task.status))} · ${sessions.length} Session · ${task.openTodoCount || 0} Todo</p>`,
       '</div>',
       `<button type="button" data-agent-task-rename="${escapeHtml(task.id)}">重命名</button>`,
       '</div>',
       '<div class="agent-task-progress-row">',
-      `<progress max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress><strong>${percent}%</strong>`,
+      `<input type="range" min="0" max="100" step="5" value="${percent}" data-agent-task-progress="${escapeHtml(task.id)}" aria-label="任务进度 ${percent}%" />`,
+      `<strong data-agent-task-progress-output="${escapeHtml(task.id)}">${percent}%</strong>`,
       '</div>',
-      task.currentStep ? `<p class="agent-task-current-step"><span>当前</span>${escapeHtml(task.currentStep)}</p>` : '',
+      '<div class="agent-task-todo-block">',
+      `<form data-agent-task-todo-form="${escapeHtml(task.id)}"><input name="todo" type="text" maxlength="180" placeholder="记录下一步…" /><button type="submit">添加 Todo</button></form>`,
+      '<div class="agent-task-todos">',
+      ...(todos.length
+        ? todos.map(todo => [
+          `<label class="${todo.done ? 'done' : ''}">`,
+          `<input type="checkbox" data-agent-task-todo-toggle="${escapeHtml(todo.id)}" data-task-id="${escapeHtml(task.id)}"${todo.done ? ' checked' : ''} />`,
+          `<span>${escapeHtml(todo.text)}</span>`,
+          `<button type="button" data-agent-task-todo-delete="${escapeHtml(todo.id)}" data-task-id="${escapeHtml(task.id)}">删除</button>`,
+          '</label>',
+        ].join(''))
+        : ['<p class="agent-task-empty-copy">暂无 Todo</p>']),
+      '</div>',
+      '</div>',
       '<div class="agent-session-list">',
-      ...sessions.map((session) => {
-        const steps = Array.isArray(session.steps) ? session.steps.slice(-3).reverse() : []
-        return [
-          '<section class="agent-session-card">',
-          '<div class="agent-session-head">',
-          '<div>',
-          `<strong>${escapeHtml(session.title || session.agent || 'Session')}</strong>`,
-          `<p>${escapeHtml(agentTaskStatusLabel(session.status))} · ${Math.round(Number(session.progress || 0))}%${session.agent ? ` · ${escapeHtml(session.agent)}` : ''}${session.app ? ` · ${escapeHtml(session.app)}` : ''}</p>`,
-          '</div>',
-          '<div class="agent-session-actions">',
-          session.target ? `<button type="button" data-agent-session-open="${escapeHtml(session.key)}">打开</button>` : '',
-          `<select data-agent-session-group="${escapeHtml(session.key)}" data-current-task="${escapeHtml(task.id)}" aria-label="调整 Session 分组">${agentSessionGroupOptions(task.id)}</select>`,
-          '</div>',
-          '</div>',
-          session.currentStep ? `<p class="agent-session-current">${escapeHtml(session.currentStep)}</p>` : '',
-          steps.length
-            ? `<ol class="agent-session-steps">${steps.map(step => `<li><time>${escapeHtml(fmtTime(step.at))}</time><span>${escapeHtml(step.text)}</span></li>`).join('')}</ol>`
-            : '',
-          '</section>',
-        ].join('')
-      }),
+      ...sessions.map(session => agentSessionCardHtml(session, task.id)),
       '</div>',
       '</article>',
     ].join('')
   }).join('')
+  const looseSection = [
+    '<section class="agent-loose-session-block">',
+    `<div><strong>待归组 Session</strong><span>${loose.length}</span></div>`,
+    '<p>Session 只有状态和过程，不代表你的任务进度。</p>',
+    '<div class="agent-session-list">',
+    ...loose.map(({ task, session }) => agentSessionCardHtml(session, task.id, { steps: false })),
+    '</div>',
+    '</section>',
+  ].join('')
+  agentTaskList.innerHTML = taskCards + looseSection
 }
 
 function agentSessionByKey(key) {
@@ -495,15 +545,41 @@ async function refreshAgentTasks() {
   }
 }
 
+async function mutateAgentTasks(action, successText = '') {
+  try {
+    const result = await action()
+    if (!result?.ok) {
+      showToast(`任务操作失败：${result?.error || '未知错误'}`)
+      return false
+    }
+    state.agentTasks = normalizeAgentTasks(result.state)
+    if (successText) showToast(successText)
+    render()
+    return true
+  } catch (error) {
+    showToast(`任务操作失败：${error?.message || error}`)
+    return false
+  }
+}
+
 async function assignAgentSession(select) {
   const sessionKey = select.dataset.agentSessionGroup
   const currentTaskId = select.dataset.currentTask
   const value = select.value
   if (!sessionKey || !value || value === currentTaskId) return
+  if (value === '__loose__') {
+    select.disabled = true
+    await mutateAgentTasks(
+      () => window.pet.detachAgentSession({ sessionKey }),
+      'Session 已移到待归组',
+    )
+    select.disabled = false
+    return
+  }
   let request = { sessionKey, taskId: value }
   if (value === '__new__') {
     const session = agentSessionByKey(sessionKey)
-    const title = window.prompt('新任务组名称', session?.title || '新任务')
+    const title = window.prompt('新任务名称', session?.title || '新任务')
     if (!title?.trim()) {
       select.value = currentTaskId
       return
@@ -527,6 +603,15 @@ async function assignAgentSession(select) {
     select.disabled = false
     render()
   }
+}
+
+async function createAgentTask() {
+  const title = window.prompt('今天要完成什么？', '新任务')
+  if (!title?.trim()) return
+  await mutateAgentTasks(
+    () => window.pet.createAgentTaskGroup({ title: title.trim() }),
+    '已创建今日任务',
+  )
 }
 
 async function renameAgentTask(taskId) {
@@ -1154,11 +1239,28 @@ closeAgentTasksButton.addEventListener('click', () => {
 })
 
 refreshAgentTasksButton.addEventListener('click', refreshAgentTasks)
+createAgentTaskButton.addEventListener('click', createAgentTask)
 
 agentTaskList.addEventListener('click', (event) => {
   const rename = event.target.closest('[data-agent-task-rename]')
   if (rename) {
     renameAgentTask(rename.dataset.agentTaskRename)
+    return
+  }
+  const visibility = event.target.closest('[data-agent-session-visibility]')
+  if (visibility) {
+    mutateAgentTasks(() => window.pet.ignoreAgentSession({
+      sessionKey: visibility.dataset.agentSessionVisibility,
+      ignored: visibility.dataset.ignored !== 'true',
+    }))
+    return
+  }
+  const deleteTodo = event.target.closest('[data-agent-task-todo-delete]')
+  if (deleteTodo) {
+    mutateAgentTasks(() => window.pet.deleteAgentTaskTodo({
+      taskId: deleteTodo.dataset.taskId,
+      todoId: deleteTodo.dataset.agentTaskTodoDelete,
+    }))
     return
   }
   const open = event.target.closest('[data-agent-session-open]')
@@ -1167,9 +1269,49 @@ agentTaskList.addEventListener('click', (event) => {
   if (session?.target) window.pet.openTarget(session.target)
 })
 
+agentTaskList.addEventListener('input', (event) => {
+  const progress = event.target.closest('[data-agent-task-progress]')
+  if (!progress) return
+  const output = progress.parentElement.querySelector('[data-agent-task-progress-output]')
+  if (output) output.textContent = `${Math.round(Number(progress.value || 0))}%`
+})
+
 agentTaskList.addEventListener('change', (event) => {
   const select = event.target.closest('[data-agent-session-group]')
-  if (select) assignAgentSession(select)
+  if (select) {
+    assignAgentSession(select)
+    return
+  }
+  const progress = event.target.closest('[data-agent-task-progress]')
+  if (progress) {
+    mutateAgentTasks(() => window.pet.setAgentTaskProgress({
+      taskId: progress.dataset.agentTaskProgress,
+      progress: Number(progress.value || 0),
+    }))
+    return
+  }
+  const todo = event.target.closest('[data-agent-task-todo-toggle]')
+  if (todo) {
+    mutateAgentTasks(() => window.pet.updateAgentTaskTodo({
+      taskId: todo.dataset.taskId,
+      todoId: todo.dataset.agentTaskTodoToggle,
+      done: todo.checked,
+    }))
+  }
+})
+
+agentTaskList.addEventListener('submit', async (event) => {
+  const form = event.target.closest('[data-agent-task-todo-form]')
+  if (!form) return
+  event.preventDefault()
+  const input = form.elements.namedItem('todo')
+  const text = String(input?.value || '').trim()
+  if (!text) return
+  const added = await mutateAgentTasks(() => window.pet.addAgentTaskTodo({
+    taskId: form.dataset.agentTaskTodoForm,
+    text,
+  }))
+  if (added && input) input.value = ''
 })
 
 toggleWorkItemsButton.addEventListener('click', () => {

@@ -1213,7 +1213,7 @@ body.move-mode #pet-gif {
 /* Aether nursery: polished, compact companion UI for the 340px panel. */
 #event-panel {
   width: min(340px, calc(100vw - 20px));
-  max-height: min(76vh, 640px);
+  max-height: min(52vh, 440px);
   padding: 12px;
   color: var(--kodama-ink);
   border: 1px solid var(--kodama-border-strong);
@@ -1917,7 +1917,8 @@ body.move-mode #pet-gif {
   transform: none;
 }
 
-/* Task-first agent workspace: one durable task can aggregate many sessions. */
+/* User tasks are durable containers. Session activity stays compact and never
+   masquerades as the user's task progress. */
 .agent-task-board-head {
   display: flex;
   align-items: flex-start;
@@ -1936,19 +1937,32 @@ body.move-mode #pet-gif {
   font-size: 13px;
 }
 
-.agent-task-board-head p,
-.agent-task-board-head > span {
+.agent-task-board-head p {
   color: var(--kodama-ink-muted);
   font-size: 9px;
 }
 
-.agent-task-board-head > span {
+.agent-task-board-head-actions {
+  display: flex;
   flex: none;
+  align-items: center;
+  gap: 5px;
+}
+
+.agent-task-board-head-actions span,
+.agent-task-board-head-actions button {
   padding: 4px 7px;
+  border: 1px solid var(--kodama-border);
   border-radius: 999px;
   background: var(--kodama-accent-soft);
   color: var(--kodama-accent-deep);
+  font-size: 8px;
   font-weight: 650;
+}
+
+.agent-task-board-head-actions button {
+  cursor: pointer;
+  background: var(--kodama-surface-raised);
 }
 
 .agent-task-board-list {
@@ -1966,7 +1980,7 @@ body.move-mode #pet-gif {
 }
 
 .agent-task-card {
-  padding: 9px;
+  padding: 8px;
   border: 1px solid var(--kodama-border);
   border-left: 3px solid var(--kodama-accent);
   border-radius: 13px;
@@ -1974,17 +1988,13 @@ body.move-mode #pet-gif {
   box-shadow: 0 5px 14px rgba(54, 79, 71, 0.06);
 }
 
-.agent-task-card[data-status="waiting"] {
-  border-left-color: var(--kodama-hatch);
-}
-
 .agent-task-card[data-status="done"] {
-  border-left-color: #63a57c;
+  border-left-color: var(--kodama-success);
   opacity: 0.78;
 }
 
-.agent-task-card[data-status="failed"] {
-  border-left-color: var(--kodama-danger);
+.agent-task-card.expanded {
+  opacity: 1;
 }
 
 .agent-task-card-head {
@@ -2017,7 +2027,9 @@ body.move-mode #pet-gif {
   font-size: 8px;
 }
 
-.agent-task-card-head button {
+.agent-task-card-head button,
+.agent-task-editor button,
+.agent-session-actions button {
   flex: none;
   padding: 3px 6px;
   border: 1px solid var(--kodama-border);
@@ -2033,14 +2045,14 @@ body.move-mode #pet-gif {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
-  margin-top: 8px;
+  margin-top: 7px;
 }
 
 .agent-task-progress > progress,
-.bubble-task-progress-track {
+.bubble-user-task-progress {
   appearance: none;
   width: 100%;
-  height: 6px;
+  height: 5px;
   overflow: hidden;
   border: 0;
   border-radius: 999px;
@@ -2048,16 +2060,15 @@ body.move-mode #pet-gif {
 }
 
 .agent-task-progress > progress::-webkit-progress-bar,
-.bubble-task-progress-track::-webkit-progress-bar {
+.bubble-user-task-progress::-webkit-progress-bar {
   border-radius: 999px;
   background: color-mix(in srgb, var(--kodama-accent) 13%, var(--kodama-surface-soft));
 }
 
 .agent-task-progress > progress::-webkit-progress-value,
-.bubble-task-progress-track::-webkit-progress-value {
+.bubble-user-task-progress::-webkit-progress-value {
   border-radius: 999px;
   background: linear-gradient(90deg, var(--kodama-accent-deep), var(--kodama-accent));
-  box-shadow: 0 0 8px color-mix(in srgb, var(--kodama-accent) 36%, transparent);
 }
 
 .agent-task-progress > span {
@@ -2069,107 +2080,294 @@ body.move-mode #pet-gif {
 }
 
 .agent-task-current {
-  margin: 6px 0 0;
+  margin: 5px 0 0;
+  overflow: hidden;
   color: var(--kodama-ink-soft);
-  font-size: 9px;
-  line-height: 1.35;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.agent-task-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--kodama-border);
+}
+
+.agent-task-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.agent-task-editor-actions button.danger {
+  color: var(--kodama-danger);
+}
+
+.agent-task-progress-editor {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 7px;
+  color: var(--kodama-ink-soft);
+  font-size: 8px;
+}
+
+.agent-task-progress-editor input {
+  width: 100%;
+}
+
+.agent-task-progress-editor output {
+  color: var(--kodama-accent-deep);
+  font-size: 9px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.agent-task-editor-section {
+  display: grid;
+  gap: 5px;
+}
+
+.agent-task-editor-heading,
+.agent-loose-sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-task-editor-heading strong,
+.agent-loose-sessions-head strong {
+  color: var(--kodama-ink);
+  font-size: 9px;
+}
+
+.agent-task-editor-heading span,
+.agent-loose-sessions-head span,
+.agent-loose-sessions-head small {
+  color: var(--kodama-ink-muted);
+  font-size: 7px;
+}
+
+.agent-task-todo-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.agent-task-todo-form input {
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--kodama-border);
+  border-radius: 8px;
+  background: var(--kodama-surface-raised);
+  color: var(--kodama-ink);
+  font-size: 8px;
+}
+
+.agent-task-todo-list,
 .agent-task-sessions {
   display: grid;
   gap: 5px;
-  margin-top: 7px;
+}
+
+.agent-task-todo {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 5px;
+  border-radius: 8px;
+  background: var(--kodama-surface-soft);
+  font-size: 8px;
+}
+
+.agent-task-todo span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-task-todo.done span {
+  color: var(--kodama-ink-muted);
+  text-decoration: line-through;
+}
+
+.agent-task-editor-empty {
+  padding: 8px;
+  border: 1px dashed var(--kodama-border);
+  border-radius: 8px;
+  color: var(--kodama-ink-muted);
+  text-align: center;
+  font-size: 8px;
 }
 
 .agent-session-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 5px;
+  padding: 5px;
+  border: 1px solid var(--kodama-border);
+  border-radius: 9px;
+  background: var(--kodama-surface-soft);
 }
 
-.agent-session-row > button {
+.agent-session-row.ignored {
+  opacity: 0.55;
+}
+
+.agent-session-main {
   min-width: 0;
-  padding: 5px 6px;
+  padding: 0;
   border: 0;
-  border-radius: 8px;
-  background: var(--kodama-surface-soft);
+  background: transparent;
   color: var(--kodama-ink-soft);
   cursor: pointer;
   text-align: left;
 }
 
-.agent-session-row > button:disabled {
+.agent-session-main:disabled {
   cursor: default;
-  opacity: 0.74;
 }
 
-.agent-session-row span,
-.agent-session-row small {
+.agent-session-main strong,
+.agent-session-main small,
+.agent-session-main span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.agent-session-row span {
-  font-size: 9px;
-  font-weight: 650;
+.agent-session-main strong {
+  color: var(--kodama-ink);
+  font-size: 8px;
 }
 
-.agent-session-row small {
-  margin-top: 2px;
+.agent-session-main small,
+.agent-session-main span {
+  margin-top: 1px;
   color: var(--kodama-ink-muted);
   font-size: 7px;
 }
 
-.agent-session-row select {
+.agent-session-actions {
+  display: grid;
+  grid-template-columns: 34px 82px;
+  gap: 4px;
+}
+
+.agent-session-actions select {
   min-width: 0;
-  padding: 0 4px;
   border: 1px solid var(--kodama-border);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--kodama-surface-raised);
   color: var(--kodama-ink-soft);
-  font-size: 8px;
+  font-size: 7px;
 }
 
-.bubble-task-progress {
-  margin-top: 8px;
-  padding-top: 7px;
-  border-top: 1px solid color-mix(in srgb, var(--kodama-border) 72%, transparent);
+.agent-loose-sessions {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed color-mix(in srgb, var(--kodama-accent) 42%, var(--kodama-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--kodama-accent-soft) 38%, var(--kodama-surface-soft));
 }
 
-.bubble-task-progress-meta,
-.bubble-task-progress-value {
+.agent-loose-sessions-head > div {
+  min-width: 0;
+}
+
+.agent-loose-sessions-head strong,
+.agent-loose-sessions-head small {
+  display: block;
+}
+
+.agent-loose-sessions-head > span {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--kodama-accent-soft);
+  color: var(--kodama-accent-deep);
+  font-weight: 700;
+}
+
+.bubble-user-task {
+  min-height: 0;
+  padding: 7px 9px;
+  border-left-color: var(--kodama-accent);
+  background: color-mix(in srgb, var(--kodama-surface-raised) 95%, var(--kodama-accent-soft));
+  cursor: pointer;
+}
+
+.bubble-user-task.drop-active {
+  border-color: var(--kodama-accent);
+  box-shadow: 0 0 0 3px var(--kodama-focus), 0 8px 24px rgba(24, 36, 52, 0.18);
+}
+
+.bubble-user-task-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   color: var(--kodama-ink-muted);
-  font-size: 9px;
-}
-
-.bubble-task-progress-meta button {
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--kodama-accent) 35%, var(--kodama-border));
-  border-radius: 999px;
-  background: var(--kodama-accent-soft);
-  color: var(--kodama-accent-deep);
-  cursor: pointer;
   font-size: 8px;
 }
 
-.bubble-task-progress-track {
-  margin: 5px 0 4px;
-}
-
-.bubble-task-progress-value span:first-child {
+.bubble-user-task-meta strong {
   color: var(--kodama-accent-deep);
-  font-weight: 700;
+  font-size: 9px;
 }
 
-.bubble-task-progress-value span:last-child {
-  min-width: 0;
+.bubble-user-task-progress {
+  display: block;
+  height: 4px;
+  margin-top: 4px;
+}
+
+.bubble-user-task-next {
   overflow: hidden;
+  margin-top: 3px;
+  color: var(--kodama-ink-soft);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-session-event {
+  padding: 7px 9px;
+}
+
+.bubble-session-event.dragging {
+  opacity: 0.45;
+}
+
+.bubble-session-event .bubble-head {
+  margin-bottom: 2px;
+}
+
+.bubble-session-event .bubble-head strong {
+  display: block;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-session-event .bubble-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 10px;
+}
+
+.bubble-session-event .bubble-target {
+  overflow: hidden;
+  font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2483,19 +2681,20 @@ body.move-mode #pet-gif {
 
 /* Notifications keep the same soft material language without losing status. */
 #bubble {
-  gap: 7px;
-  width: min(340px, calc(100vw - 20px));
+  gap: 5px;
+  width: min(320px, calc(100vw - 20px));
+  max-height: min(46vh, 300px);
   color: var(--kodama-ink);
   font-family: var(--kodama-font);
   scrollbar-color: color-mix(in srgb, var(--kodama-accent) 48%, transparent) transparent;
 }
 
 .bubble-card {
-  padding: 9px 11px;
+  padding: 7px 9px;
   color: var(--kodama-ink);
   border: 1px solid var(--kodama-border);
   border-left: 3px solid var(--kodama-accent);
-  border-radius: 15px;
+  border-radius: 12px;
   background: var(--kodama-surface-raised);
   box-shadow: 0 10px 28px rgba(36, 58, 48, 0.14), inset 0 1px rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(18px) saturate(1.08);

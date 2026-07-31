@@ -2600,6 +2600,54 @@ ipcMain.handle('pet:agent-task-rename', (_e, request) => {
   return result
 })
 
+ipcMain.handle('pet:agent-task-create-group', (_e, request) => {
+  const result = startAgentTaskBoard().createGroup(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-set-progress', (_e, request) => {
+  const result = startAgentTaskBoard().setTaskProgress(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-delete-group', (_e, request) => {
+  const result = startAgentTaskBoard().deleteGroup(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-detach-session', (_e, request) => {
+  const result = startAgentTaskBoard().detachSession(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-ignore-session', (_e, request) => {
+  const result = startAgentTaskBoard().setSessionIgnored(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-add-todo', (_e, request) => {
+  const result = startAgentTaskBoard().addTodo(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-update-todo', (_e, request) => {
+  const result = startAgentTaskBoard().updateTodo(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
+ipcMain.handle('pet:agent-task-delete-todo', (_e, request) => {
+  const result = startAgentTaskBoard().deleteTodo(request)
+  if (result?.ok) broadcastAgentTaskBoard(result.state)
+  return result
+})
+
 ipcMain.handle('pet:work-item-create-from-assistant', (_e, request) => {
   return createWorkItemFromAssistant(request)
 })

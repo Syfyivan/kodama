@@ -126,7 +126,7 @@ test('multiple sessions can be manually grouped under one task', () => {
   assert.equal(board.getState().tasks[0].title, '实现任务模型')
 })
 
-test('task progress aggregates completed and running sessions', () => {
+test('user task progress stays independent from its sessions', () => {
   const { board } = fixture()
   const first = board.record({
     type: 'task_done',
@@ -151,7 +151,33 @@ test('task progress aggregates completed and running sessions', () => {
   assert.equal(task.status, 'running')
   assert.equal(task.doneSessions, 1)
   assert.equal(task.runningSessions, 1)
-  assert.ok(task.progress > 50 && task.progress < 100)
+  assert.equal(task.progress, 0)
+
+  const updated = board.setTaskProgress({
+    taskId: task.id,
+    progress: 45,
+  })
+  assert.equal(updated.ok, true)
+  assert.equal(updated.state.tasks[0].progress, 45)
+
+  board.record({
+    type: 'task_done',
+    source: 'local',
+    sessionId: 'session-b',
+    sessionTitle: '验证安装包',
+    text: '验证完成',
+  })
+  const sessionsDone = board.getState().tasks[0]
+  assert.equal(sessionsDone.doneSessions, 2)
+  assert.equal(sessionsDone.progress, 45)
+  assert.equal(sessionsDone.status, 'running')
+
+  const completed = board.setTaskProgress({
+    taskId: task.id,
+    progress: 100,
+  })
+  assert.equal(completed.state.tasks[0].progress, 100)
+  assert.equal(completed.state.tasks[0].status, 'done')
 })
 
 test('a completed session restarting resets its live progress', () => {
@@ -217,6 +243,100 @@ test('a new named group can be created while moving a session', () => {
   assert.equal(result.ok, true)
   assert.equal(result.state.tasks.length, 1)
   assert.equal(result.state.tasks[0].title, '桌宠工作台升级')
+})
+
+test('an empty custom group remains available as a drop target', () => {
+  const { board } = fixture()
+  const result = board.createGroup({ title: '商业化需求' })
+  const task = result.state.tasks.find(item => item.id === result.taskId)
+
+  assert.equal(result.ok, true)
+  assert.equal(task.customGroup, true)
+  assert.equal(task.status, 'idle')
+  assert.equal(task.sessionCount, 0)
+})
+
+test('sessions can leave a group and deleting a group returns sessions to loose tasks', () => {
+  const { board } = fixture()
+  const group = board.createGroup({ title: '机器人桥接器' })
+  const sessions = ['session-a', 'session-b'].map(sessionId => board.record({
+    type: 'task_progress',
+    source: 'local',
+    sessionId,
+    sessionTitle: `会话 ${sessionId}`,
+    text: '正在实现',
+  }))
+  for (const recorded of sessions) {
+    board.assignSession({
+      sessionKey: recorded.event.taskProgress.sessionKey,
+      taskId: group.taskId,
+    })
+  }
+
+  const detached = board.detachSession({
+    sessionKey: sessions[1].event.taskProgress.sessionKey,
+  })
+  assert.equal(detached.ok, true)
+  assert.equal(detached.state.tasks.find(task => task.id === group.taskId).sessionCount, 1)
+
+  const deleted = board.deleteGroup({ taskId: group.taskId })
+  assert.equal(deleted.ok, true)
+  assert.equal(deleted.state.tasks.some(task => task.id === group.taskId), false)
+  assert.equal(deleted.state.tasks.filter(task => task.customGroup !== true).length, 2)
+  assert.deepEqual(
+    deleted.state.tasks.flatMap(task => task.sessions.map(session => session.id)).sort(),
+    ['session-a', 'session-b'],
+  )
+})
+
+test('sessions can be hidden from compact task surfaces without losing progress', () => {
+  const { board } = fixture()
+  const recorded = board.record({
+    type: 'task_progress',
+    source: 'local',
+    sessionId: 'session-hide',
+    text: '正在验证',
+  })
+  const hidden = board.setSessionIgnored({
+    sessionKey: recorded.event.taskProgress.sessionKey,
+    ignored: true,
+  })
+
+  assert.equal(hidden.ok, true)
+  assert.equal(hidden.state.tasks[0].sessions[0].ignored, true)
+  assert.equal(hidden.state.tasks[0].sessions[0].progress, 75)
+
+  const shown = board.setSessionIgnored({
+    sessionKey: recorded.event.taskProgress.sessionKey,
+    ignored: false,
+  })
+  assert.equal(shown.state.tasks[0].sessions[0].ignored, false)
+})
+
+test('custom groups persist a bounded todo checklist', () => {
+  const { board } = fixture()
+  const group = board.createGroup({ title: '商业化需求' })
+  const first = board.addTodo({ taskId: group.taskId, text: '确认上线范围' })
+  const firstTodo = first.state.tasks.find(task => task.id === group.taskId).todos[0]
+  board.addTodo({ taskId: group.taskId, text: '补充回归用例' })
+
+  const completed = board.updateTodo({
+    taskId: group.taskId,
+    todoId: firstTodo.id,
+    done: true,
+  })
+  let task = completed.state.tasks.find(item => item.id === group.taskId)
+  assert.equal(task.todoCount, 2)
+  assert.equal(task.openTodoCount, 1)
+  assert.equal(task.todos.find(todo => todo.id === firstTodo.id).done, true)
+
+  const removed = board.deleteTodo({
+    taskId: group.taskId,
+    todoId: task.todos.find(todo => todo.id !== firstTodo.id).id,
+  })
+  task = removed.state.tasks.find(item => item.id === group.taskId)
+  assert.equal(task.todoCount, 1)
+  assert.equal(task.openTodoCount, 0)
 })
 
 test('subagent sessions inherit the parent session task', () => {

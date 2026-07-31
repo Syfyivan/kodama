@@ -764,6 +764,11 @@ button:hover:not(:disabled) {
   background: #e9edf4;
 }
 
+.agent-task-progress-row > input[type="range"] {
+  flex: 1;
+  accent-color: #456ee8;
+}
+
 .agent-task-progress-row > progress::-webkit-progress-bar {
   border-radius: 999px;
   background: #e9edf4;
@@ -798,6 +803,68 @@ button:hover:not(:disabled) {
   font-weight: 800;
 }
 
+.agent-task-todo-block {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #e4e9f1;
+  border-radius: 11px;
+  background: #fafbfd;
+}
+
+.agent-task-todo-block form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.agent-task-todo-block form input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #30405a;
+}
+
+.agent-task-todo-block button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #d9e1ec;
+  border-radius: 8px;
+  background: #fff;
+  color: #40516a;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.agent-task-todos {
+  display: grid;
+  gap: 5px;
+}
+
+.agent-task-todos label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  color: #53637a;
+  font-size: 11px;
+}
+
+.agent-task-todos label.done span {
+  color: #9aa5b4;
+  text-decoration: line-through;
+}
+
+.agent-task-empty-copy {
+  margin: 0;
+  color: #9aa5b4;
+  font-size: 10px;
+}
+
 .agent-session-list {
   display: grid;
   gap: 8px;
@@ -809,6 +876,10 @@ button:hover:not(:disabled) {
   border: 1px solid #e4e9f1;
   border-radius: 11px;
   background: #fafbfd;
+}
+
+.agent-session-card.ignored {
+  opacity: 0.55;
 }
 
 .agent-session-head strong {
@@ -864,6 +935,39 @@ button:hover:not(:disabled) {
 
 .agent-session-steps time {
   color: #9aa5b4;
+}
+
+.agent-loose-session-block {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px dashed #b9c9e7;
+  border-radius: 14px;
+  background: #f4f7fd;
+}
+
+.agent-loose-session-block > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #30405a;
+}
+
+.agent-loose-session-block > div:first-child span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: #dfe8ff;
+  color: #315bd6;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.agent-loose-session-block > p {
+  margin: 5px 0 0;
+  color: #7a879a;
+  font-size: 10px;
 }
 
 .knowledge-drawer {

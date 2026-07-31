@@ -55,12 +55,15 @@
       <div class="panel-section tab-panel" data-tab-panel="tasks">
         <div class="agent-task-board-head">
           <div>
-            <h2>今日 Agent 任务</h2>
-            <p id="agent-task-board-summary">还没有收到任务事件</p>
+            <h2>我的今日任务</h2>
+            <p id="agent-task-board-summary">一个任务可以包含多个 Session</p>
           </div>
-          <span id="agent-task-board-running">0 进行中</span>
+          <div class="agent-task-board-head-actions">
+            <span id="agent-task-board-running">0 进行中</span>
+            <button id="agent-task-add" type="button">＋ 新建</button>
+          </div>
         </div>
-        <div id="agent-task-board-list" class="agent-task-board-list empty">Agent 开始工作后，会在这里持续更新进度</div>
+        <div id="agent-task-board-list" class="agent-task-board-list empty">先新建你今天要完成的任务，再把相关 Session 归入其中</div>
       </div>
       <div id="appearance-panel" class="panel-section tab-panel appearance-panel" data-tab-panel="appearance">
         <div class="appearance-heading">

@@ -69,6 +69,7 @@ const sessionEvents = document.getElementById('session-events')
 const agentTaskBoardSummary = document.getElementById('agent-task-board-summary')
 const agentTaskBoardRunning = document.getElementById('agent-task-board-running')
 const agentTaskBoardList = document.getElementById('agent-task-board-list')
+const agentTaskAdd = document.getElementById('agent-task-add')
 const larkInboxEvents = document.getElementById('lark-inbox-events')
 const larkInboxRefresh = document.getElementById('lark-inbox-refresh')
 const larkInboxSummary = document.getElementById('lark-inbox-summary')
@@ -192,8 +193,10 @@ const BUBBLE_ACTION_DEBOUNCE_MS = 600
 const ACTIVE_TARGET_TTL_MS = 10 * 60 * 1000
 const TRACKED_TASK_EVENT_TYPES = new Set(['session_title', 'task_started', 'task_progress', 'task_waiting', 'task_done', 'task_failed', 'agent_done'])
 const FLOATING_PADDING = 8
-const BUBBLE_WIDTH = 340
+const BUBBLE_WIDTH = 320
 const PANEL_WIDTH = 340
+const BUBBLE_MAX_HEIGHT = 300
+const PANEL_MAX_HEIGHT = 440
 let bridgeTasksSharePending = false
 let bridgeTasksState = {
   loading: false,
@@ -289,6 +292,8 @@ let bubbleActionCooldownTimer = 0
 let activeViewedTarget = { key: '', at: 0 }
 let updateStatus = null
 let agentEventQueue = Promise.resolve()
+let activeAgentTaskId = ''
+let draggedAgentSessionKey = ''
 
 function clampNumber(value, min, max, fallback) {
   const n = Number(value)
@@ -578,14 +583,12 @@ async function init() {
     disposeAgentSync = connectAgentSync(handleAgentEvent, { ...agentCfg, onStatus: hooks.onStatus })
     window.pet.onAgentEvent?.(handleAgentEvent) // source 'local'
     window.pet.onAgentTaskBoardUpdate?.((state) => {
-      agentTaskBoardState = normalizeAgentTaskBoardState(state)
-      reconcileBubbleTaskProgress()
+      applyAgentTaskState(state)
       syncEventPanel()
     })
     window.pet.agentTaskBoard?.()
       .then((state) => {
-        agentTaskBoardState = normalizeAgentTaskBoardState(state)
-        reconcileBubbleTaskProgress()
+        applyAgentTaskState(state)
         syncEventPanel()
       })
       .catch((error) => {
@@ -1209,7 +1212,9 @@ function overElement(el, x, y) {
 }
 
 function overInteractiveSurface(x, y) {
-  return panelVisible || overElement(bubble, x, y) || overPet(x, y)
+  return panelVisible
+    || overElement(bubble, x, y)
+    || overPet(x, y)
 }
 
 function areBubbleActionsCoolingDown() {
@@ -1292,7 +1297,8 @@ function setupInteraction() {
 
   function targetInsidePanel(target) {
     return Boolean(target?.nodeType && (
-      eventPanel?.contains(target) || appearanceConfirm?.contains(target)
+      eventPanel?.contains(target)
+      || appearanceConfirm?.contains(target)
     ))
   }
 
@@ -1342,7 +1348,11 @@ function setupInteraction() {
   })
 
   window.addEventListener('mousedown', (e) => {
-    if (panelVisible || e.button !== 0 || overElement(bubble, e.clientX, e.clientY)) return
+    if (
+      panelVisible
+      || e.button !== 0
+      || overElement(bubble, e.clientX, e.clientY)
+    ) return
     if (!overPet(e.clientX, e.clientY)) return
     // 左键直接按在桌宠身上即可拖动(抓住就拖,符合直觉);静止点击不会移动它,
     // 左键触发模式下静止点击=摸摸。右键仍打开面板。
@@ -1373,6 +1383,13 @@ function setupInteraction() {
     if (e.target.closest?.('[data-dismiss-all-bubbles]')) {
       if (areBubbleActionsCoolingDown()) return
       debounceBubbleActions()
+      const sessionKeys = [...new Set(bubbleLog
+        .filter(item => item?.event?.taskProgress?.customGroup !== true)
+        .map(item => item?.event?.taskProgress?.sessionKey)
+        .filter(Boolean))]
+      sessionKeys.forEach((sessionKey) => {
+        window.pet.ignoreAgentSession?.({ sessionKey, ignored: true }).catch?.(() => {})
+      })
       bubbleLog.length = 0
       hideBubbleHover()
       renderBubbles()
@@ -1383,6 +1400,14 @@ function setupInteraction() {
       if (areBubbleActionsCoolingDown()) return
       debounceBubbleActions()
       hideBubbleHover()
+      const item = bubbleLog.find(record => record.id === dismiss.dataset.dismissBubble)
+      const sessionKey = item?.event?.taskProgress?.sessionKey
+      if (sessionKey) {
+        runAgentTaskMutation(() => window.pet.ignoreAgentSession?.({
+          sessionKey,
+          ignored: true,
+        }))
+      }
       removeBubble(dismiss.dataset.dismissBubble)
       return
     }
@@ -1394,9 +1419,10 @@ function setupInteraction() {
       shareBubbleSession(share.dataset.shareBubble)
       return
     }
-    const taskBoard = e.target.closest?.('[data-open-task-board]')
-    if (taskBoard) {
+    const userTask = e.target.closest?.('[data-open-user-task], [data-user-task-id]')
+    if (userTask) {
       hideBubbleHover()
+      activeAgentTaskId = userTask.dataset.openUserTask || userTask.dataset.userTaskId
       setActivePanelTab('tasks')
       togglePanel(true)
       return
@@ -1413,6 +1439,51 @@ function setupInteraction() {
       return
     }
     openBubbleTarget(item?.event || activeBubbleEvent, item?.id || '')
+  })
+
+  bubble.addEventListener('dragstart', (e) => {
+    const card = e.target.closest?.('[data-agent-session-drag]')
+    if (!card) return
+    draggedAgentSessionKey = card.dataset.agentSessionDrag || ''
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', draggedAgentSessionKey)
+    requestAnimationFrame(() => card.classList.add('dragging'))
+  })
+
+  bubble.addEventListener('dragover', (e) => {
+    const task = e.target.closest?.('[data-agent-task-drop]')
+    if (!task || !draggedAgentSessionKey) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    bubble.querySelectorAll('.drop-active').forEach(item => item.classList.remove('drop-active'))
+    task.classList.add('drop-active')
+  })
+
+  bubble.addEventListener('dragleave', (e) => {
+    const task = e.target.closest?.('[data-agent-task-drop]')
+    if (task && !task.contains(e.relatedTarget)) task.classList.remove('drop-active')
+  })
+
+  bubble.addEventListener('drop', async (e) => {
+    const task = e.target.closest?.('[data-agent-task-drop]')
+    const sessionKey = e.dataTransfer.getData('text/plain') || draggedAgentSessionKey
+    bubble.querySelectorAll('.drop-active').forEach(item => item.classList.remove('drop-active'))
+    if (!task || !sessionKey) return
+    e.preventDefault()
+    await runAgentTaskMutation(
+      () => window.pet.assignAgentSession?.({
+        sessionKey,
+        taskId: task.dataset.agentTaskDrop,
+      }),
+      'Session 已归入任务',
+    )
+  })
+
+  bubble.addEventListener('dragend', () => {
+    draggedAgentSessionKey = ''
+    bubble.querySelectorAll('.dragging, .drop-active').forEach(item => {
+      item.classList.remove('dragging', 'drop-active')
+    })
   })
 
   bubble.addEventListener('mousemove', (e) => {
@@ -1585,6 +1656,12 @@ function setElementMaxHeight(el, maxHeight) {
   if (!el) return
   const height = Math.max(44, Math.floor(maxHeight))
   el.style.maxHeight = `${height}px`
+}
+
+function capElementMaxHeight(el, cap) {
+  if (!el) return
+  const current = Number.parseFloat(el.style.maxHeight)
+  setElementMaxHeight(el, Number.isFinite(current) ? Math.min(current, cap) : cap)
 }
 
 function rectIntersection(a, b) {
@@ -1837,16 +1914,21 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
 }
 
 function positionBubble() {
+  setElementMaxHeight(bubble, BUBBLE_MAX_HEIGHT)
   if (uiSettings.bubbleCorner !== 'near') {
     setElementCorner(bubble, uiSettings.bubbleCorner, BUBBLE_WIDTH, 54)
+    capElementMaxHeight(bubble, BUBBLE_MAX_HEIGHT)
     return
   }
   positionNearPet(bubble, BUBBLE_WIDTH, 80)
+  capElementMaxHeight(bubble, BUBBLE_MAX_HEIGHT)
 }
 
 function positionPanel() {
   if (!eventPanel || eventPanel.classList.contains('hidden')) return
+  setElementMaxHeight(eventPanel, PANEL_MAX_HEIGHT)
   setElementCorner(eventPanel, uiSettings.panelCorner, PANEL_WIDTH, 260)
+  capElementMaxHeight(eventPanel, PANEL_MAX_HEIGHT)
   positionAppearanceConfirm()
 }
 
@@ -1971,27 +2053,36 @@ function bubbleMergeKey(event) {
   return ''
 }
 
-function bubbleProgressHtml(event) {
-  const progress = event?.taskProgress
-  if (!progress?.taskId) return ''
-  const percent = Math.min(100, Math.max(0, Math.round(Number(progress.percent || 0))))
-  const sessions = Number(progress.sessionCount || 0)
-  const done = Number(progress.doneSessions || 0)
-  const waiting = Number(progress.waitingSessions || 0)
-  const status = waiting
-    ? `${waiting} 个等待你`
-    : sessions > 1
-      ? `${done}/${sessions} Session 完成`
-      : agentTaskStatusLabel(progress.status)
+function userTaskBubbleTasks() {
+  return (agentTaskBoardState.todayTasks || [])
+    .filter(task => task.customGroup === true)
+    .slice()
+    .sort((a, b) => (
+      Number(a.progress >= 100) - Number(b.progress >= 100)
+      || Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || '')
+    ))
+}
+
+function userTaskBubbleHtml(task) {
+  const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
+  const sessions = Array.isArray(task.sessions) ? task.sessions : []
+  const nextTodo = (task.todos || []).find(todo => todo.done !== true)
+  const current = nextTodo?.text || task.currentStep || ''
   return [
-    '<div class="bubble-task-progress">',
-    '<div class="bubble-task-progress-meta">',
-    `<span>${escapeHtml(status)}</span>`,
-    `<button type="button" data-open-task-board="${escapeHtml(progress.taskId)}">查看任务</button>`,
+    `<article class="bubble-card bubble-user-task" data-user-task-id="${escapeHtml(task.id)}" data-agent-task-drop="${escapeHtml(task.id)}">`,
+    '<div class="bubble-head">',
+    `<strong>任务 · ${escapeHtml(task.title || '未命名任务')}</strong>`,
+    '<div class="bubble-actions">',
+    `<button type="button" data-open-user-task="${escapeHtml(task.id)}">编辑</button>`,
     '</div>',
-    `<progress class="bubble-task-progress-track" max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress>`,
-    `<div class="bubble-task-progress-value"><span>${percent}%</span><span>${escapeHtml(shortText(progress.currentStep || event.text || '', 52))}</span></div>`,
     '</div>',
+    '<div class="bubble-user-task-meta">',
+    `<span>${escapeHtml(agentTaskStatusLabel(task.status))} · ${sessions.length} Session · ${task.openTodoCount || 0} Todo</span>`,
+    `<strong>${percent}%</strong>`,
+    '</div>',
+    `<progress class="bubble-user-task-progress" max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress>`,
+    current ? `<div class="bubble-user-task-next">${escapeHtml(shortText(current, 58))}</div>` : '',
+    '</article>',
   ].join('')
 }
 
@@ -2046,24 +2137,31 @@ function trimBubbles() {
 }
 
 function renderBubbles() {
-  if (!bubbleLog.length) {
+  const taskBubbles = userTaskBubbleTasks()
+  const sessionBubbles = bubbleLog.filter(item => (
+    item?.event?.taskProgress?.customGroup !== true
+    && item?.event?.taskProgress?.ignored !== true
+  ))
+  if (!taskBubbles.length && !sessionBubbles.length) {
     bubble.classList.add('hidden')
     bubble.innerHTML = ''
     activeBubbleEvent = null
     hideBubbleHover()
     return
   }
-  activeBubbleEvent = bubbleLog[0]?.event || null
+  activeBubbleEvent = sessionBubbles[0]?.event || null
   const actionsCoolingDown = areBubbleActionsCoolingDown()
-  const stackTools = bubbleLog.length > 1
+  const stackTools = sessionBubbles.length > 1
     ? `<div class="bubble-stack-tools"><button type="button" data-dismiss-all-bubbles="1"${actionsCoolingDown ? ' disabled' : ''}>全部忽略</button></div>`
     : ''
-  bubble.innerHTML = stackTools + bubbleLog.map((item) => {
+  const taskCards = taskBubbles.map(userTaskBubbleHtml).join('')
+  const sessionCards = sessionBubbles.map((item) => {
     const target = targetForEvent(item.event)
     const targetText = target ? `<div class="bubble-target">${escapeHtml(target.label || '打开会话')}</div>` : ''
     const shareButton = bubbleShareButtonHtml(item, actionsCoolingDown)
+    const sessionKey = String(item?.event?.taskProgress?.sessionKey || '')
     return [
-      `<article class="bubble-card bubble-${escapeHtml(item.kind)}${target ? ' clickable' : ''}" data-bubble-id="${escapeHtml(item.id)}">`,
+      `<article class="bubble-card bubble-session-event bubble-${escapeHtml(item.kind)}${target ? ' clickable' : ''}" data-bubble-id="${escapeHtml(item.id)}"${sessionKey ? ` draggable="true" data-agent-session-drag="${escapeHtml(sessionKey)}"` : ''}>`,
       '<div class="bubble-head">',
       `<strong>${escapeHtml(item.title)}</strong>`,
       '<div class="bubble-actions">',
@@ -2072,11 +2170,11 @@ function renderBubbles() {
       '</div>',
       '</div>',
       `<div class="bubble-text">${escapeHtml(item.text)}</div>`,
-      bubbleProgressHtml(item.event),
       targetText,
       '</article>',
     ].join('')
   }).join('')
+  bubble.innerHTML = stackTools + taskCards + sessionCards
   bubble.classList.remove('hidden')
   positionBubble()
 }
@@ -2548,6 +2646,7 @@ function setupEventPanel() {
   settingInstallUpdate?.addEventListener('click', installUpdateFromSettings)
   settingMovePet?.addEventListener('click', () => enterMoveMode())
   settingHidePet?.addEventListener('click', () => window.pet.setHidden?.(true))
+  agentTaskAdd?.addEventListener('click', createAgentTask)
   eventPanel?.addEventListener('click', (e) => {
     const tabButton = e.target.closest?.('[data-tab]')
     if (tabButton) {
@@ -2572,11 +2671,53 @@ function setupEventPanel() {
       renameAgentTask(renameTask.dataset.agentTaskRename)
       return
     }
+    const editTask = e.target.closest?.('[data-agent-task-edit]')
+    if (editTask) {
+      e.stopPropagation()
+      activeAgentTaskId = activeAgentTaskId === editTask.dataset.agentTaskEdit
+        ? ''
+        : editTask.dataset.agentTaskEdit
+      renderAgentTaskBoard()
+      positionPanel()
+      return
+    }
+    const deleteTask = e.target.closest?.('[data-agent-task-delete]')
+    if (deleteTask) {
+      e.stopPropagation()
+      const task = agentUserTasks().find(item => item.id === deleteTask.dataset.agentTaskDelete)
+      if (!task) return
+      const confirmed = window.confirm(`删除任务“${task.title}”？\n\n关联 Session 会回到待归组，Session 记录不会丢失；该任务的 Todo 会被删除。`)
+      if (!confirmed) return
+      activeAgentTaskId = ''
+      runAgentTaskMutation(
+        () => window.pet.deleteAgentTaskGroup?.({ taskId: task.id }),
+        '任务已删除，Session 已回到待归组',
+      )
+      return
+    }
+    const deleteTodo = e.target.closest?.('[data-agent-task-todo-delete]')
+    if (deleteTodo) {
+      e.stopPropagation()
+      runAgentTaskMutation(() => window.pet.deleteAgentTaskTodo?.({
+        taskId: deleteTodo.dataset.taskId,
+        todoId: deleteTodo.dataset.agentTaskTodoDelete,
+      }))
+      return
+    }
     const openSession = e.target.closest?.('[data-agent-session-open]')
     if (openSession) {
       e.stopPropagation()
       const session = agentSessionByKey(openSession.dataset.agentSessionOpen)
       if (session?.target) openTarget(session.target)
+      return
+    }
+    const visibility = e.target.closest?.('[data-agent-session-visibility]')
+    if (visibility) {
+      e.stopPropagation()
+      runAgentTaskMutation(() => window.pet.ignoreAgentSession?.({
+        sessionKey: visibility.dataset.agentSessionVisibility,
+        ignored: visibility.dataset.ignored !== 'true',
+      }))
       return
     }
     const item = e.target.closest?.('[data-event-id]')
@@ -2587,9 +2728,47 @@ function setupEventPanel() {
     const bridgeItem = e.target.closest?.('[data-bridge-task-id]')
     if (bridgeItem) openBridgeTasksWindow()
   })
+  eventPanel?.addEventListener('input', (e) => {
+    const progress = e.target.closest?.('[data-agent-task-progress]')
+    if (!progress) return
+    const output = eventPanel.querySelector(`[data-agent-task-progress-output="${CSS.escape(progress.dataset.agentTaskProgress)}"]`)
+    if (output) output.textContent = `${Math.round(Number(progress.value || 0))}%`
+  })
   eventPanel?.addEventListener('change', (e) => {
     const select = e.target.closest?.('[data-agent-session-group]')
-    if (select) assignAgentSession(select)
+    if (select) {
+      assignAgentSession(select)
+      return
+    }
+    const progress = e.target.closest?.('[data-agent-task-progress]')
+    if (progress) {
+      runAgentTaskMutation(() => window.pet.setAgentTaskProgress?.({
+        taskId: progress.dataset.agentTaskProgress,
+        progress: Number(progress.value || 0),
+      }))
+      return
+    }
+    const todo = e.target.closest?.('[data-agent-task-todo-toggle]')
+    if (todo) {
+      runAgentTaskMutation(() => window.pet.updateAgentTaskTodo?.({
+        taskId: todo.dataset.taskId,
+        todoId: todo.dataset.agentTaskTodoToggle,
+        done: todo.checked,
+      }))
+    }
+  })
+  eventPanel?.addEventListener('submit', async (e) => {
+    const form = e.target.closest?.('[data-agent-task-todo-form]')
+    if (!form) return
+    e.preventDefault()
+    const input = form.elements.namedItem('todo')
+    const text = String(input?.value || '').trim()
+    if (!text) return
+    const added = await runAgentTaskMutation(() => window.pet.addAgentTaskTodo?.({
+      taskId: form.dataset.agentTaskTodoForm,
+      text,
+    }))
+    if (added && input) input.value = ''
   })
   syncEventPanel()
 }
@@ -3166,6 +3345,8 @@ function reconcileBubbleTaskProgress() {
       bySession.set(session.key, {
         taskId: task.id,
         taskTitle: task.title,
+        customGroup: task.customGroup === true,
+        ignored: session.ignored === true,
         status: task.status,
         percent: task.progress,
         currentStep: task.currentStep,
@@ -3213,76 +3394,167 @@ function agentTaskStatusLabel(status) {
   }[status] || status || '未知'
 }
 
-function agentTaskGroupOptions(sessionKey, currentTaskId) {
-  const tasks = agentTaskBoardState.todayTasks || []
+function agentUserTasks() {
+  return (agentTaskBoardState.todayTasks || [])
+    .filter(task => task.customGroup === true)
+    .slice()
+    .sort((a, b) => (
+      Number(a.progress >= 100) - Number(b.progress >= 100)
+      || Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || '')
+    ))
+}
+
+function agentLooseSessions() {
+  return (agentTaskBoardState.todayTasks || [])
+    .filter(task => task.customGroup !== true)
+    .flatMap(task => (task.sessions || []).map(session => ({ task, session })))
+    .sort((a, b) => (
+      Number(new Set(['done', 'cancelled']).has(a.session.status))
+      - Number(new Set(['done', 'cancelled']).has(b.session.status))
+      || Date.parse(b.session.updatedAt || '') - Date.parse(a.session.updatedAt || '')
+    ))
+}
+
+function agentSessionSourceLabel(session) {
+  if (session.source === 'lark') return '飞书机器人'
+  return session.app || session.agent || (session.source === 'local' ? '本机 Agent' : session.source) || 'Agent'
+}
+
+function agentTaskGroupOptions(currentTaskId = '') {
+  const tasks = agentUserTasks()
+  const currentIsTask = tasks.some(task => task.id === currentTaskId)
   return [
-    `<option value="${escapeHtml(currentTaskId)}">当前任务</option>`,
+    currentIsTask
+      ? `<option value="${escapeHtml(currentTaskId)}">当前任务</option>`
+      : '<option value="" selected disabled>加入任务…</option>',
     ...tasks
       .filter(task => task.id !== currentTaskId)
-      .map(task => `<option value="${escapeHtml(task.id)}">移到：${escapeHtml(shortText(task.title, 36))}</option>`),
-    '<option value="__new__">＋ 新建任务组…</option>',
+      .map(task => `<option value="${escapeHtml(task.id)}">移到：${escapeHtml(shortText(task.title, 30))}</option>`),
+    currentIsTask ? '<option value="__loose__">移到待归组</option>' : '',
+    '<option value="__new__">＋ 新建任务…</option>',
+  ].join('')
+}
+
+function agentSessionRowHtml(session, currentTaskId = '') {
+  const current = shortText(session.currentStep || (session.status === 'done' ? '已完成' : '准备执行'), 54)
+  return [
+    `<article class="agent-session-row${session.ignored ? ' ignored' : ''}">`,
+    `<button class="agent-session-main" type="button" data-agent-session-open="${escapeHtml(session.key)}"${session.target ? '' : ' disabled'}>`,
+    `<strong>${escapeHtml(session.title || session.agent || 'Session')}</strong>`,
+    `<small>${escapeHtml(agentSessionSourceLabel(session))} · ${escapeHtml(agentTaskStatusLabel(session.status))}${session.ignored ? ' · 已隐藏' : ''}</small>`,
+    current ? `<span>${escapeHtml(current)}</span>` : '',
+    '</button>',
+    '<div class="agent-session-actions">',
+    `<button class="agent-session-visibility" type="button" data-agent-session-visibility="${escapeHtml(session.key)}" data-ignored="${session.ignored === true ? 'true' : 'false'}">${session.ignored ? '显示' : '忽略'}</button>`,
+    `<select data-agent-session-group="${escapeHtml(session.key)}" data-current-task="${escapeHtml(currentTaskId)}" aria-label="调整 Session 所属任务">`,
+    agentTaskGroupOptions(currentTaskId),
+    '</select>',
+    '</div>',
+    '</article>',
+  ].join('')
+}
+
+function agentTaskEditorHtml(task) {
+  const todos = Array.isArray(task.todos) ? task.todos : []
+  const sessions = (Array.isArray(task.sessions) ? task.sessions : []).slice()
+    .sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
+  const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
+  return [
+    '<div class="agent-task-editor">',
+    '<div class="agent-task-editor-actions">',
+    `<button type="button" data-agent-task-rename="${escapeHtml(task.id)}">修改名称</button>`,
+    `<button class="danger" type="button" data-agent-task-delete="${escapeHtml(task.id)}">删除任务</button>`,
+    '</div>',
+    '<label class="agent-task-progress-editor">',
+    '<span>任务进度</span>',
+    `<input type="range" min="0" max="100" step="5" value="${percent}" data-agent-task-progress="${escapeHtml(task.id)}" />`,
+    `<output data-agent-task-progress-output="${escapeHtml(task.id)}">${percent}%</output>`,
+    '</label>',
+    '<section class="agent-task-editor-section">',
+    `<div class="agent-task-editor-heading"><strong>Todo</strong><span>${task.openTodoCount || 0}/${todos.length} 未完成</span></div>`,
+    `<form class="agent-task-todo-form" data-agent-task-todo-form="${escapeHtml(task.id)}">`,
+    '<input name="todo" type="text" maxlength="180" placeholder="记录下一步…" />',
+    '<button type="submit">添加</button>',
+    '</form>',
+    '<div class="agent-task-todo-list">',
+    ...(todos.length
+      ? todos.map(todo => [
+        `<label class="agent-task-todo${todo.done ? ' done' : ''}">`,
+        `<input type="checkbox" data-agent-task-todo-toggle="${escapeHtml(todo.id)}" data-task-id="${escapeHtml(task.id)}"${todo.done ? ' checked' : ''} />`,
+        `<span>${escapeHtml(todo.text)}</span>`,
+        `<button type="button" data-agent-task-todo-delete="${escapeHtml(todo.id)}" data-task-id="${escapeHtml(task.id)}">删除</button>`,
+        '</label>',
+      ].join(''))
+      : ['<div class="agent-task-editor-empty">还没有 Todo</div>']),
+    '</div>',
+    '</section>',
+    '<section class="agent-task-editor-section">',
+    `<div class="agent-task-editor-heading"><strong>Session</strong><span>${sessions.length} 个</span></div>`,
+    '<div class="agent-task-sessions">',
+    ...(sessions.length
+      ? sessions.map(session => agentSessionRowHtml(session, task.id))
+      : ['<div class="agent-task-editor-empty">可将待归组 Session 拖到桌宠旁的任务气泡</div>']),
+    '</div>',
+    '</section>',
+    '</div>',
   ].join('')
 }
 
 function renderAgentTaskBoard() {
   if (!agentTaskBoardList) return
-  const tasks = (agentTaskBoardState.todayTasks || []).slice()
-    .sort((a, b) => (
-      ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[a.status] ?? 9)
-      - ({ waiting: 0, running: 1, failed: 2, idle: 3, done: 4 }[b.status] ?? 9)
-      || Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || '')
-    ))
-  const counts = agentTaskBoardState.counts || {}
+  const tasks = agentUserTasks()
+  const loose = agentLooseSessions()
+  const running = tasks.filter(task => task.status === 'running').length
+  const done = tasks.filter(task => task.status === 'done').length
+  if (activeAgentTaskId && !tasks.some(task => task.id === activeAgentTaskId)) activeAgentTaskId = ''
   if (agentTaskBoardSummary) {
-    agentTaskBoardSummary.textContent = `${tasks.length} 个任务 · ${counts.done || 0} 完成 · ${counts.waiting || 0} 等待`
+    agentTaskBoardSummary.textContent = `${tasks.length} 个任务 · ${done} 完成 · ${loose.length} 个待归组 Session`
   }
-  if (agentTaskBoardRunning) {
-    agentTaskBoardRunning.textContent = `${counts.running || 0} 进行中`
-  }
+  if (agentTaskBoardRunning) agentTaskBoardRunning.textContent = `${running} 进行中`
   if (metricTasks) metricTasks.textContent = String(tasks.length)
-  if (!tasks.length) {
+  if (!tasks.length && !loose.length) {
     agentTaskBoardList.className = 'agent-task-board-list empty'
-    agentTaskBoardList.textContent = 'Agent 开始工作后，会在这里持续更新进度'
+    agentTaskBoardList.textContent = '先新建你今天要完成的任务，再把相关 Session 归入其中'
     return
   }
   agentTaskBoardList.className = 'agent-task-board-list'
-  agentTaskBoardList.innerHTML = tasks.map((task) => {
+  const taskCards = tasks.map((task) => {
     const sessions = Array.isArray(task.sessions) ? task.sessions : []
     const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
-    const sessionSummary = `${task.doneSessions || 0}/${task.sessionCount || sessions.length} Session 完成`
+    const nextTodo = (task.todos || []).find(todo => todo.done !== true)
+    const expanded = activeAgentTaskId === task.id
     return [
-      `<article class="agent-task-card" data-status="${escapeHtml(task.status)}" data-agent-task-id="${escapeHtml(task.id)}">`,
+      `<article class="agent-task-card${expanded ? ' expanded' : ''}" data-status="${escapeHtml(task.status)}" data-agent-task-id="${escapeHtml(task.id)}">`,
       '<div class="agent-task-card-head">',
       '<div>',
       `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
-      `<span>${escapeHtml(agentTaskStatusLabel(task.status))} · ${escapeHtml(sessionSummary)}</span>`,
+      `<span>${escapeHtml(agentTaskStatusLabel(task.status))} · ${sessions.length} Session · ${task.openTodoCount || 0} Todo</span>`,
       '</div>',
-      `<button type="button" data-agent-task-rename="${escapeHtml(task.id)}" title="重命名任务">重命名</button>`,
+      `<button type="button" data-agent-task-edit="${escapeHtml(task.id)}">${expanded ? '收起' : '编辑'}</button>`,
       '</div>',
       '<div class="agent-task-progress">',
       `<progress max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress>`,
       `<span>${percent}%</span>`,
       '</div>',
-      task.currentStep ? `<p class="agent-task-current">当前：${escapeHtml(shortText(task.currentStep, 86))}</p>` : '',
-      '<div class="agent-task-sessions">',
-      ...sessions
-        .slice()
-        .sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
-        .map((session) => [
-          '<div class="agent-session-row">',
-          `<button type="button" data-agent-session-open="${escapeHtml(session.key)}"${session.target ? '' : ' disabled'}>`,
-          `<span>${escapeHtml(session.title || session.agent || 'Session')}</span>`,
-          `<small>${escapeHtml(agentTaskStatusLabel(session.status))} · ${Math.round(Number(session.progress || 0))}%${session.agent ? ` · ${escapeHtml(session.agent)}` : ''}</small>`,
-          '</button>',
-          `<select data-agent-session-group="${escapeHtml(session.key)}" data-current-task="${escapeHtml(task.id)}" aria-label="调整 Session 分组">`,
-          agentTaskGroupOptions(session.key, task.id),
-          '</select>',
-          '</div>',
-        ].join('')),
-      '</div>',
+      nextTodo ? `<p class="agent-task-current">下一步：${escapeHtml(shortText(nextTodo.text, 72))}</p>` : '',
+      expanded ? agentTaskEditorHtml(task) : '',
       '</article>',
     ].join('')
   }).join('')
+  const looseSection = [
+    '<section class="agent-loose-sessions">',
+    '<div class="agent-loose-sessions-head">',
+    '<div><strong>待归组 Session</strong><small>Session 只有状态，不代表任务进度</small></div>',
+    `<span>${loose.length}</span>`,
+    '</div>',
+    '<div class="agent-task-sessions">',
+    ...(loose.length
+      ? loose.map(({ task, session }) => agentSessionRowHtml(session, task.id))
+      : ['<div class="agent-task-editor-empty">当前没有待归组 Session</div>']),
+    '</div>',
+    '</section>',
+  ].join('')
+  agentTaskBoardList.innerHTML = taskCards + looseSection
 }
 
 function agentSessionByKey(key) {
@@ -3298,10 +3570,19 @@ async function assignAgentSession(select) {
   const currentTaskId = select?.dataset.currentTask || ''
   const targetTaskId = select?.value || ''
   if (!sessionKey || !targetTaskId || targetTaskId === currentTaskId) return
+  if (targetTaskId === '__loose__') {
+    select.disabled = true
+    await runAgentTaskMutation(
+      () => window.pet.detachAgentSession?.({ sessionKey }),
+      'Session 已移到待归组',
+    )
+    select.disabled = false
+    return
+  }
   let request = { sessionKey, taskId: targetTaskId }
   if (targetTaskId === '__new__') {
     const session = agentSessionByKey(sessionKey)
-    const title = window.prompt('新任务组名称', session?.title || '新任务')
+    const title = window.prompt('新任务名称', session?.title || '新任务')
     if (!title?.trim()) {
       select.value = currentTaskId
       return
@@ -3316,9 +3597,7 @@ async function assignAgentSession(select) {
       select.value = currentTaskId
       return
     }
-    agentTaskBoardState = normalizeAgentTaskBoardState(result.state)
-    reconcileBubbleTaskProgress()
-    renderAgentTaskBoard()
+    applyAgentTaskState(result.state)
   } catch (error) {
     say(`归组失败：${error?.message || error}`, 3000)
     select.value = currentTaskId
@@ -3338,12 +3617,46 @@ async function renameAgentTask(taskId) {
       say(`重命名失败：${result?.error || '未知错误'}`, 3000)
       return
     }
-    agentTaskBoardState = normalizeAgentTaskBoardState(result.state)
-    reconcileBubbleTaskProgress()
-    renderAgentTaskBoard()
+    applyAgentTaskState(result.state)
   } catch (error) {
     say(`重命名失败：${error?.message || error}`, 3000)
   }
+}
+
+function applyAgentTaskState(value) {
+  agentTaskBoardState = normalizeAgentTaskBoardState(value)
+  reconcileBubbleTaskProgress()
+  renderAgentTaskBoard()
+  renderBubbles()
+}
+
+async function runAgentTaskMutation(action, successText = '') {
+  try {
+    const result = await action()
+    if (!result?.ok) {
+      say(`任务操作失败：${result?.error || '未知错误'}`, 3200)
+      return false
+    }
+    applyAgentTaskState(result.state)
+    if (successText) say(successText, 1800)
+    return true
+  } catch (error) {
+    say(`任务操作失败：${error?.message || error}`, 3200)
+    return false
+  }
+}
+
+async function createAgentTask() {
+  const title = window.prompt('今天要完成什么？', '新任务')
+  if (!title?.trim()) return
+  const created = await runAgentTaskMutation(
+    () => window.pet.createAgentTaskGroup?.({ title: title.trim() }),
+    '已创建今日任务',
+  )
+  if (!created) return
+  const task = agentUserTasks().find(item => item.title === title.trim())
+  if (task) activeAgentTaskId = task.id
+  renderAgentTaskBoard()
 }
 
 function larkMessageTarget(message) {
