@@ -71,6 +71,8 @@ let lastTraeHookReceipt = null
 let lastIgnoredTraeHookReceipt = null
 let lastOpenedTarget = null
 let petHidden = false
+let petOverlayMouseIgnoreRequested = true
+let petOverlayInteractionSuspended = false
 let topmostTimers = []
 let topmostInterval = null
 let larkInbox = null
@@ -126,6 +128,17 @@ function sendToLarkWorkbench(channel, payload) {
   if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
     larkWorkbenchWin.webContents.send(channel, payload)
   }
+}
+
+function applyPetOverlayMousePolicy() {
+  if (!win || win.isDestroyed()) return
+  const ignoreMouse = petOverlayInteractionSuspended || petOverlayMouseIgnoreRequested
+  win.setIgnoreMouseEvents(ignoreMouse, ignoreMouse ? { forward: true } : undefined)
+}
+
+function setPetOverlayInteractionSuspended(suspended) {
+  petOverlayInteractionSuspended = Boolean(suspended)
+  applyPetOverlayMousePolicy()
 }
 
 function normalizeWorkbenchNavigation(request = {}) {
@@ -851,7 +864,8 @@ function createWindow() {
   reassertTopmost()
   // Click-through by default; the renderer flips this on when the cursor is
   // over the model (forward:true keeps mousemove events flowing for hit-testing).
-  win.setIgnoreMouseEvents(true, { forward: true })
+  petOverlayMouseIgnoreRequested = true
+  applyPetOverlayMousePolicy()
   win.loadFile(path.join(__dirname, '../renderer/index.html'))
   // macOS resets collection behavior on show; re-assert so the pet floats over
   // other apps' fullscreen spaces, not just the desktop.
@@ -877,20 +891,20 @@ function createLarkWorkbenchWindow(request = {}) {
   function showLarkWorkbenchWindow() {
     if (!larkWorkbenchWin || larkWorkbenchWin.isDestroyed()) return
     try {
+      setPetOverlayInteractionSuspended(true)
       app.focus({ steal: true })
       larkWorkbenchWin.center()
+      // The desktop pet is a screen-saver-level transparent overlay. Keep the
+      // focused workbench one level above it so real macOS mouse events reach
+      // the controls instead of falling through to the app behind Kodama.
+      larkWorkbenchWin.setAlwaysOnTop(true, 'screen-saver', 2)
       larkWorkbenchWin.show()
       larkWorkbenchWin.focus()
       larkWorkbenchWin.moveTop?.()
       sendWorkbenchNavigation()
-      larkWorkbenchWin.setAlwaysOnTop(true, 'floating')
-      setTimeout(() => {
-        if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
-          larkWorkbenchWin.setAlwaysOnTop(false)
-        }
-      }, 1200).unref?.()
       larkWorkbenchStatus = { phase: 'visible', error: '', updatedAt: new Date().toISOString() }
     } catch (err) {
+      setPetOverlayInteractionSuspended(false)
       larkWorkbenchStatus = { phase: 'show-failed', error: err.message, updatedAt: new Date().toISOString() }
       console.error(`[kodama] show Lark workbench failed: ${err.message}`)
     }
@@ -909,6 +923,7 @@ function createLarkWorkbenchWindow(request = {}) {
     minHeight: 620,
     title: 'Kodama 工作台',
     show: false,
+    acceptFirstMouse: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -953,12 +968,21 @@ function createLarkWorkbenchWindow(request = {}) {
   })
   setTimeout(showLarkWorkbenchWindow, 800).unref?.()
   larkWorkbenchWin.on('show', () => {
+    setPetOverlayInteractionSuspended(true)
     larkWorkbenchStatus = { phase: 'visible', error: '', updatedAt: new Date().toISOString() }
   })
+  larkWorkbenchWin.on('focus', () => {
+    setPetOverlayInteractionSuspended(true)
+  })
+  larkWorkbenchWin.on('blur', () => {
+    setPetOverlayInteractionSuspended(false)
+  })
   larkWorkbenchWin.on('hide', () => {
+    setPetOverlayInteractionSuspended(false)
     larkWorkbenchStatus = { phase: 'hidden', error: '', updatedAt: new Date().toISOString() }
   })
   larkWorkbenchWin.on('closed', () => {
+    setPetOverlayInteractionSuspended(false)
     larkWorkbenchStatus = { phase: 'closed', error: '', updatedAt: new Date().toISOString() }
     larkWorkbenchWin = null
   })
@@ -1350,7 +1374,13 @@ function fitWindowToWorkArea() {
 // renderer -> main: toggle click-through
 ipcMain.on('pet:set-ignore-mouse', (e, ignore, opts) => {
   const w = BrowserWindow.fromWebContents(e.sender)
-  if (w) w.setIgnoreMouseEvents(ignore, opts)
+  if (!w) return
+  if (w === win) {
+    petOverlayMouseIgnoreRequested = Boolean(ignore)
+    applyPetOverlayMousePolicy()
+    return
+  }
+  w.setIgnoreMouseEvents(ignore, opts)
 })
 
 // renderer -> main: drag the window by a screen-space delta

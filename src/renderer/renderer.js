@@ -3883,6 +3883,8 @@ async function openBridgeTasksWindow() {
 }
 
 async function openUnifiedWorkbench(tab = 'messages', taskId = '') {
+  if (panelVisible) togglePanel(false)
+  window.pet.setIgnoreMouse(true, { forward: true })
   const result = await window.pet.openLarkWorkbench?.({ tab, taskId })
   if (!result?.ok) say(`打开工作台失败：${result?.error || '未知错误'}`, 2600)
   return result || { ok: false, error: '工作台入口不可用' }

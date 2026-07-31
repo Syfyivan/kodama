@@ -30,3 +30,13 @@ test('task edit buttons navigate to the centered task workspace', () => {
   assert.match(renderer, /openUnifiedWorkbench\('tasks', userTask\.dataset\.openUserTask \|\| userTask\.dataset\.userTaskId\)/)
   assert.doesNotMatch(renderer, /expanded \? agentTaskEditorHtml/)
 })
+
+test('opening the workbench releases the full-screen pet overlay mouse capture', () => {
+  assert.match(renderer, /async function openUnifiedWorkbench[\s\S]*?togglePanel\(false\)[\s\S]*?setIgnoreMouse\(true, \{ forward: true \}\)/)
+  assert.match(main, /function setPetOverlayInteractionSuspended\(suspended\)/)
+  assert.match(main, /larkWorkbenchWin = new BrowserWindow\(\{[\s\S]*?acceptFirstMouse: true/)
+  assert.match(main, /showLarkWorkbenchWindow\(\)[\s\S]*?setPetOverlayInteractionSuspended\(true\)/)
+  assert.match(main, /larkWorkbenchWin\.setAlwaysOnTop\(true, 'screen-saver', 2\)/)
+  assert.match(main, /larkWorkbenchWin\.on\('blur',[\s\S]*?setPetOverlayInteractionSuspended\(false\)/)
+  assert.match(main, /larkWorkbenchWin\.on\('closed',[\s\S]*?setPetOverlayInteractionSuspended\(false\)/)
+})
