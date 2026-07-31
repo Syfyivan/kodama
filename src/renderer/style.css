@@ -1993,10 +1993,6 @@ body.move-mode #pet-gif {
   opacity: 0.78;
 }
 
-.agent-task-card.expanded {
-  opacity: 1;
-}
-
 .agent-task-card-head {
   display: flex;
   align-items: flex-start;
@@ -2028,7 +2024,6 @@ body.move-mode #pet-gif {
 }
 
 .agent-task-card-head button,
-.agent-task-editor button,
 .agent-session-actions button {
   flex: none;
   padding: 3px 6px;
@@ -2088,50 +2083,6 @@ body.move-mode #pet-gif {
   white-space: nowrap;
 }
 
-.agent-task-editor {
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--kodama-border);
-}
-
-.agent-task-editor-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 5px;
-}
-
-.agent-task-editor-actions button.danger {
-  color: var(--kodama-danger);
-}
-
-.agent-task-progress-editor {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 30px;
-  align-items: center;
-  gap: 7px;
-  color: var(--kodama-ink-soft);
-  font-size: 8px;
-}
-
-.agent-task-progress-editor input {
-  width: 100%;
-}
-
-.agent-task-progress-editor output {
-  color: var(--kodama-accent-deep);
-  font-size: 9px;
-  font-weight: 700;
-  text-align: right;
-}
-
-.agent-task-editor-section {
-  display: grid;
-  gap: 5px;
-}
-
-.agent-task-editor-heading,
 .agent-loose-sessions-head {
   display: flex;
   align-items: center;
@@ -2139,60 +2090,20 @@ body.move-mode #pet-gif {
   gap: 8px;
 }
 
-.agent-task-editor-heading strong,
 .agent-loose-sessions-head strong {
   color: var(--kodama-ink);
   font-size: 9px;
 }
 
-.agent-task-editor-heading span,
 .agent-loose-sessions-head span,
 .agent-loose-sessions-head small {
   color: var(--kodama-ink-muted);
   font-size: 7px;
 }
 
-.agent-task-todo-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 5px;
-}
-
-.agent-task-todo-form input {
-  min-width: 0;
-  padding: 5px 7px;
-  border: 1px solid var(--kodama-border);
-  border-radius: 8px;
-  background: var(--kodama-surface-raised);
-  color: var(--kodama-ink);
-  font-size: 8px;
-}
-
-.agent-task-todo-list,
 .agent-task-sessions {
   display: grid;
   gap: 5px;
-}
-
-.agent-task-todo {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 5px;
-  border-radius: 8px;
-  background: var(--kodama-surface-soft);
-  font-size: 8px;
-}
-
-.agent-task-todo span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.agent-task-todo.done span {
-  color: var(--kodama-ink-muted);
-  text-decoration: line-through;
 }
 
 .agent-task-editor-empty {

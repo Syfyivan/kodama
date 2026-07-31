@@ -55,9 +55,8 @@ const { createCodexSessionTitleResolver, isCodexDesktopTranscript } = require('.
 const LOCAL_AGENT_PORT = 7766
 
 let win
-let taskWin
-let manageWin
 let larkWorkbenchWin
+let pendingWorkbenchNavigation = { tab: 'messages', taskId: '' }
 let lastUiSettings = null
 let tray
 let pomodoro = null
@@ -127,6 +126,27 @@ function sendToLarkWorkbench(channel, payload) {
   if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
     larkWorkbenchWin.webContents.send(channel, payload)
   }
+}
+
+function normalizeWorkbenchNavigation(request = {}) {
+  const allowedTabs = new Set([
+    'messages',
+    'tasks',
+    'work-items',
+    'bridge',
+    'agenda',
+    'knowledge',
+    'settings',
+  ])
+  const tab = allowedTabs.has(request?.tab) ? request.tab : 'messages'
+  return {
+    tab,
+    taskId: tab === 'tasks' ? String(request?.taskId || '').trim() : '',
+  }
+}
+
+function sendWorkbenchNavigation() {
+  sendToLarkWorkbench('pet:workbench-navigate', pendingWorkbenchNavigation)
 }
 
 function larkInboxStateFile() {
@@ -848,58 +868,21 @@ function createWindow() {
 }
 
 function createBridgeTasksWindow() {
-  function showBridgeTasksWindow() {
-    if (!taskWin || taskWin.isDestroyed()) return
-    try {
-      app.focus({ steal: true })
-      taskWin.show()
-      taskWin.focus()
-      if (typeof taskWin.moveTop === 'function') taskWin.moveTop()
-      taskWin.setAlwaysOnTop(true, 'floating')
-      setTimeout(() => {
-        if (taskWin && !taskWin.isDestroyed()) taskWin.setAlwaysOnTop(false)
-      }, 1200).unref?.()
-    } catch (err) {
-      console.error(`[kodama] show bridge tasks window failed: ${err.message}`)
-    }
-  }
-
-  if (taskWin && !taskWin.isDestroyed()) {
-    showBridgeTasksWindow()
-    return taskWin
-  }
-
-  taskWin = new BrowserWindow({
-    width: 1080,
-    height: 760,
-    minWidth: 820,
-    minHeight: 560,
-    title: 'Kodama Bridge Tasks',
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  })
-  taskWin.loadFile(path.join(__dirname, '../renderer/bridge-tasks.html'))
-  taskWin.once('ready-to-show', showBridgeTasksWindow)
-  taskWin.webContents.once('did-finish-load', showBridgeTasksWindow)
-  setTimeout(showBridgeTasksWindow, 800).unref?.()
-  taskWin.on('closed', () => {
-    taskWin = null
-  })
-  return taskWin
+  return createLarkWorkbenchWindow({ tab: 'bridge' })
 }
 
-function createLarkWorkbenchWindow() {
+function createLarkWorkbenchWindow(request = {}) {
+  pendingWorkbenchNavigation = normalizeWorkbenchNavigation(request)
+
   function showLarkWorkbenchWindow() {
     if (!larkWorkbenchWin || larkWorkbenchWin.isDestroyed()) return
     try {
       app.focus({ steal: true })
+      larkWorkbenchWin.center()
       larkWorkbenchWin.show()
       larkWorkbenchWin.focus()
       larkWorkbenchWin.moveTop?.()
+      sendWorkbenchNavigation()
       larkWorkbenchWin.setAlwaysOnTop(true, 'floating')
       setTimeout(() => {
         if (larkWorkbenchWin && !larkWorkbenchWin.isDestroyed()) {
@@ -920,10 +903,10 @@ function createLarkWorkbenchWindow() {
   }
 
   larkWorkbenchWin = new BrowserWindow({
-    width: 1180,
-    height: 800,
-    minWidth: 880,
-    minHeight: 600,
+    width: 960,
+    height: 760,
+    minWidth: 800,
+    minHeight: 620,
     title: 'Kodama 工作台',
     show: false,
     webPreferences: {
@@ -951,6 +934,7 @@ function createLarkWorkbenchWindow() {
     sendToLarkWorkbench('pet:agent-task-board-updated', startAgentTaskBoard().getState())
     sendToLarkWorkbench('pet:knowledge-updated', startKnowledgeHub().getState())
     sendToLarkWorkbench('pet:lark-agenda-updated', startLarkAgenda().getState())
+    sendWorkbenchNavigation()
     scheduleCurrentLarkAttentionAnalysis()
   })
   larkWorkbenchWin.webContents.on('did-fail-load', (_event, code, description) => {
@@ -981,36 +965,8 @@ function createLarkWorkbenchWindow() {
   return larkWorkbenchWin
 }
 
-// A real, roomy settings/management window (the right-click overlay panel is
-// cramped). It talks to the pet renderer's ui-settings via the main cache.
 function openManageWindow() {
-  if (manageWin && !manageWin.isDestroyed()) {
-    manageWin.show()
-    manageWin.focus()
-    return manageWin
-  }
-  manageWin = new BrowserWindow({
-    width: 760,
-    height: 720,
-    minWidth: 560,
-    minHeight: 520,
-    title: 'Kodama 管理',
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  })
-  manageWin.loadFile(path.join(__dirname, '../renderer/manage.html'))
-  manageWin.once('ready-to-show', () => {
-    manageWin.show()
-    manageWin.focus()
-  })
-  manageWin.on('closed', () => {
-    manageWin = null
-  })
-  return manageWin
+  return createLarkWorkbenchWindow({ tab: 'settings' })
 }
 
 // Float above everything — including other apps' fullscreen spaces — on all desktops.
@@ -2554,9 +2510,9 @@ ipcMain.handle('pet:lark-inbox-refresh', async () => {
   return larkInbox.refresh({ reason: 'manual' })
 })
 
-ipcMain.handle('pet:open-lark-workbench', () => {
+ipcMain.handle('pet:open-lark-workbench', (_event, request = {}) => {
   if (!larkInbox) startLarkInbox()
-  createLarkWorkbenchWindow()
+  createLarkWorkbenchWindow(request)
   return { ok: true }
 })
 

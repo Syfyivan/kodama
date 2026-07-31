@@ -292,7 +292,6 @@ let bubbleActionCooldownTimer = 0
 let activeViewedTarget = { key: '', at: 0 }
 let updateStatus = null
 let agentEventQueue = Promise.resolve()
-let activeAgentTaskId = ''
 let draggedAgentSessionKey = ''
 
 function clampNumber(value, min, max, fallback) {
@@ -1422,9 +1421,7 @@ function setupInteraction() {
     const userTask = e.target.closest?.('[data-open-user-task], [data-user-task-id]')
     if (userTask) {
       hideBubbleHover()
-      activeAgentTaskId = userTask.dataset.openUserTask || userTask.dataset.userTaskId
-      setActivePanelTab('tasks')
-      togglePanel(true)
+      openUnifiedWorkbench('tasks', userTask.dataset.openUserTask || userTask.dataset.userTaskId)
       return
     }
     const card = e.target.closest?.('[data-bubble-id]')
@@ -2519,13 +2516,13 @@ function setupEventPanel() {
     syncAccessories()
     backend?.applySettings?.()
   })
-  bridgeTasksOpen?.addEventListener('click', () => openBridgeTasksWindow())
-  manageOpen?.addEventListener('click', () => window.pet.openManageWindow?.())
+  bridgeTasksOpen?.addEventListener('click', () => openUnifiedWorkbench('bridge'))
+  manageOpen?.addEventListener('click', () => openUnifiedWorkbench('settings'))
   bridgeTasksRefresh?.addEventListener('click', () => refreshBridgeTasks({ force: true }))
   bridgeTasksShare?.addEventListener('click', () => shareBridgeTaskViewer())
   bridgeTasksWindow?.addEventListener('click', () => openBridgeTasksWindow())
   larkInboxRefresh?.addEventListener('click', () => refreshLarkInbox({ force: true }))
-  larkWorkbenchOpen?.addEventListener('click', () => window.pet.openLarkWorkbench?.())
+  larkWorkbenchOpen?.addEventListener('click', () => openUnifiedWorkbench('messages'))
   larkWebPushOpen?.addEventListener('click', () => openLarkWebPushWindow())
   larkWebPushReload?.addEventListener('click', () => reloadLarkWebPushWindow())
   larkBaseOpen?.addEventListener('click', () => openLarkBaseTable())
@@ -2665,43 +2662,10 @@ function setupEventPanel() {
       shareSubagentTranscript(shareSub.dataset.shareSubagent)
       return
     }
-    const renameTask = e.target.closest?.('[data-agent-task-rename]')
-    if (renameTask) {
-      e.stopPropagation()
-      renameAgentTask(renameTask.dataset.agentTaskRename)
-      return
-    }
     const editTask = e.target.closest?.('[data-agent-task-edit]')
     if (editTask) {
       e.stopPropagation()
-      activeAgentTaskId = activeAgentTaskId === editTask.dataset.agentTaskEdit
-        ? ''
-        : editTask.dataset.agentTaskEdit
-      renderAgentTaskBoard()
-      positionPanel()
-      return
-    }
-    const deleteTask = e.target.closest?.('[data-agent-task-delete]')
-    if (deleteTask) {
-      e.stopPropagation()
-      const task = agentUserTasks().find(item => item.id === deleteTask.dataset.agentTaskDelete)
-      if (!task) return
-      const confirmed = window.confirm(`删除任务“${task.title}”？\n\n关联 Session 会回到待归组，Session 记录不会丢失；该任务的 Todo 会被删除。`)
-      if (!confirmed) return
-      activeAgentTaskId = ''
-      runAgentTaskMutation(
-        () => window.pet.deleteAgentTaskGroup?.({ taskId: task.id }),
-        '任务已删除，Session 已回到待归组',
-      )
-      return
-    }
-    const deleteTodo = e.target.closest?.('[data-agent-task-todo-delete]')
-    if (deleteTodo) {
-      e.stopPropagation()
-      runAgentTaskMutation(() => window.pet.deleteAgentTaskTodo?.({
-        taskId: deleteTodo.dataset.taskId,
-        todoId: deleteTodo.dataset.agentTaskTodoDelete,
-      }))
+      openUnifiedWorkbench('tasks', editTask.dataset.agentTaskEdit)
       return
     }
     const openSession = e.target.closest?.('[data-agent-session-open]')
@@ -2728,47 +2692,9 @@ function setupEventPanel() {
     const bridgeItem = e.target.closest?.('[data-bridge-task-id]')
     if (bridgeItem) openBridgeTasksWindow()
   })
-  eventPanel?.addEventListener('input', (e) => {
-    const progress = e.target.closest?.('[data-agent-task-progress]')
-    if (!progress) return
-    const output = eventPanel.querySelector(`[data-agent-task-progress-output="${CSS.escape(progress.dataset.agentTaskProgress)}"]`)
-    if (output) output.textContent = `${Math.round(Number(progress.value || 0))}%`
-  })
   eventPanel?.addEventListener('change', (e) => {
     const select = e.target.closest?.('[data-agent-session-group]')
-    if (select) {
-      assignAgentSession(select)
-      return
-    }
-    const progress = e.target.closest?.('[data-agent-task-progress]')
-    if (progress) {
-      runAgentTaskMutation(() => window.pet.setAgentTaskProgress?.({
-        taskId: progress.dataset.agentTaskProgress,
-        progress: Number(progress.value || 0),
-      }))
-      return
-    }
-    const todo = e.target.closest?.('[data-agent-task-todo-toggle]')
-    if (todo) {
-      runAgentTaskMutation(() => window.pet.updateAgentTaskTodo?.({
-        taskId: todo.dataset.taskId,
-        todoId: todo.dataset.agentTaskTodoToggle,
-        done: todo.checked,
-      }))
-    }
-  })
-  eventPanel?.addEventListener('submit', async (e) => {
-    const form = e.target.closest?.('[data-agent-task-todo-form]')
-    if (!form) return
-    e.preventDefault()
-    const input = form.elements.namedItem('todo')
-    const text = String(input?.value || '').trim()
-    if (!text) return
-    const added = await runAgentTaskMutation(() => window.pet.addAgentTaskTodo?.({
-      taskId: form.dataset.agentTaskTodoForm,
-      text,
-    }))
-    if (added && input) input.value = ''
+    if (select) assignAgentSession(select)
   })
   syncEventPanel()
 }
@@ -3454,59 +3380,12 @@ function agentSessionRowHtml(session, currentTaskId = '') {
   ].join('')
 }
 
-function agentTaskEditorHtml(task) {
-  const todos = Array.isArray(task.todos) ? task.todos : []
-  const sessions = (Array.isArray(task.sessions) ? task.sessions : []).slice()
-    .sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
-  const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
-  return [
-    '<div class="agent-task-editor">',
-    '<div class="agent-task-editor-actions">',
-    `<button type="button" data-agent-task-rename="${escapeHtml(task.id)}">修改名称</button>`,
-    `<button class="danger" type="button" data-agent-task-delete="${escapeHtml(task.id)}">删除任务</button>`,
-    '</div>',
-    '<label class="agent-task-progress-editor">',
-    '<span>任务进度</span>',
-    `<input type="range" min="0" max="100" step="5" value="${percent}" data-agent-task-progress="${escapeHtml(task.id)}" />`,
-    `<output data-agent-task-progress-output="${escapeHtml(task.id)}">${percent}%</output>`,
-    '</label>',
-    '<section class="agent-task-editor-section">',
-    `<div class="agent-task-editor-heading"><strong>Todo</strong><span>${task.openTodoCount || 0}/${todos.length} 未完成</span></div>`,
-    `<form class="agent-task-todo-form" data-agent-task-todo-form="${escapeHtml(task.id)}">`,
-    '<input name="todo" type="text" maxlength="180" placeholder="记录下一步…" />',
-    '<button type="submit">添加</button>',
-    '</form>',
-    '<div class="agent-task-todo-list">',
-    ...(todos.length
-      ? todos.map(todo => [
-        `<label class="agent-task-todo${todo.done ? ' done' : ''}">`,
-        `<input type="checkbox" data-agent-task-todo-toggle="${escapeHtml(todo.id)}" data-task-id="${escapeHtml(task.id)}"${todo.done ? ' checked' : ''} />`,
-        `<span>${escapeHtml(todo.text)}</span>`,
-        `<button type="button" data-agent-task-todo-delete="${escapeHtml(todo.id)}" data-task-id="${escapeHtml(task.id)}">删除</button>`,
-        '</label>',
-      ].join(''))
-      : ['<div class="agent-task-editor-empty">还没有 Todo</div>']),
-    '</div>',
-    '</section>',
-    '<section class="agent-task-editor-section">',
-    `<div class="agent-task-editor-heading"><strong>Session</strong><span>${sessions.length} 个</span></div>`,
-    '<div class="agent-task-sessions">',
-    ...(sessions.length
-      ? sessions.map(session => agentSessionRowHtml(session, task.id))
-      : ['<div class="agent-task-editor-empty">可将待归组 Session 拖到桌宠旁的任务气泡</div>']),
-    '</div>',
-    '</section>',
-    '</div>',
-  ].join('')
-}
-
 function renderAgentTaskBoard() {
   if (!agentTaskBoardList) return
   const tasks = agentUserTasks()
   const loose = agentLooseSessions()
   const running = tasks.filter(task => task.status === 'running').length
   const done = tasks.filter(task => task.status === 'done').length
-  if (activeAgentTaskId && !tasks.some(task => task.id === activeAgentTaskId)) activeAgentTaskId = ''
   if (agentTaskBoardSummary) {
     agentTaskBoardSummary.textContent = `${tasks.length} 个任务 · ${done} 完成 · ${loose.length} 个待归组 Session`
   }
@@ -3522,22 +3401,20 @@ function renderAgentTaskBoard() {
     const sessions = Array.isArray(task.sessions) ? task.sessions : []
     const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
     const nextTodo = (task.todos || []).find(todo => todo.done !== true)
-    const expanded = activeAgentTaskId === task.id
     return [
-      `<article class="agent-task-card${expanded ? ' expanded' : ''}" data-status="${escapeHtml(task.status)}" data-agent-task-id="${escapeHtml(task.id)}">`,
+      `<article class="agent-task-card" data-status="${escapeHtml(task.status)}" data-agent-task-id="${escapeHtml(task.id)}">`,
       '<div class="agent-task-card-head">',
       '<div>',
       `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
       `<span>${escapeHtml(agentTaskStatusLabel(task.status))} · ${sessions.length} Session · ${task.openTodoCount || 0} Todo</span>`,
       '</div>',
-      `<button type="button" data-agent-task-edit="${escapeHtml(task.id)}">${expanded ? '收起' : '编辑'}</button>`,
+      `<button type="button" data-agent-task-edit="${escapeHtml(task.id)}">编辑</button>`,
       '</div>',
       '<div class="agent-task-progress">',
       `<progress max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress>`,
       `<span>${percent}%</span>`,
       '</div>',
       nextTodo ? `<p class="agent-task-current">下一步：${escapeHtml(shortText(nextTodo.text, 72))}</p>` : '',
-      expanded ? agentTaskEditorHtml(task) : '',
       '</article>',
     ].join('')
   }).join('')
@@ -3606,23 +3483,6 @@ async function assignAgentSession(select) {
   }
 }
 
-async function renameAgentTask(taskId) {
-  const task = (agentTaskBoardState.tasks || []).find(item => item.id === taskId)
-  if (!task) return
-  const title = window.prompt('任务名称', task.title || '')
-  if (!title?.trim() || title.trim() === task.title) return
-  try {
-    const result = await window.pet.renameAgentTask?.({ taskId, title: title.trim() })
-    if (!result?.ok) {
-      say(`重命名失败：${result?.error || '未知错误'}`, 3000)
-      return
-    }
-    applyAgentTaskState(result.state)
-  } catch (error) {
-    say(`重命名失败：${error?.message || error}`, 3000)
-  }
-}
-
 function applyAgentTaskState(value) {
   agentTaskBoardState = normalizeAgentTaskBoardState(value)
   reconcileBubbleTaskProgress()
@@ -3655,8 +3515,7 @@ async function createAgentTask() {
   )
   if (!created) return
   const task = agentUserTasks().find(item => item.title === title.trim())
-  if (task) activeAgentTaskId = task.id
-  renderAgentTaskBoard()
+  if (task) openUnifiedWorkbench('tasks', task.id)
 }
 
 function larkMessageTarget(message) {
@@ -4019,8 +3878,14 @@ async function refreshBridgeTasks({ force = false } = {}) {
 }
 
 async function openBridgeTasksWindow() {
-  const result = await window.pet.openBridgeTasksWindow?.()
+  const result = await openUnifiedWorkbench('bridge')
   if (!result?.ok) say(`打开任务详情失败：${result?.error || '未知错误'}`, 2600)
+}
+
+async function openUnifiedWorkbench(tab = 'messages', taskId = '') {
+  const result = await window.pet.openLarkWorkbench?.({ tab, taskId })
+  if (!result?.ok) say(`打开工作台失败：${result?.error || '未知错误'}`, 2600)
+  return result || { ok: false, error: '工作台入口不可用' }
 }
 
 async function shareBridgeTaskViewer() {

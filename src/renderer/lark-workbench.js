@@ -7,26 +7,22 @@ const messageList = document.getElementById('message-list')
 const detail = document.getElementById('message-detail')
 const toast = document.getElementById('workbench-toast')
 const toggleAgentTasksButton = document.getElementById('toggle-agent-tasks')
-const agentTaskDrawer = document.getElementById('agent-task-drawer')
 const agentTaskStatus = document.getElementById('agent-task-status')
 const agentTaskList = document.getElementById('agent-task-list')
 const createAgentTaskButton = document.getElementById('create-agent-task')
 const refreshAgentTasksButton = document.getElementById('refresh-agent-tasks')
 const closeAgentTasksButton = document.getElementById('close-agent-tasks')
 const toggleAgendaButton = document.getElementById('toggle-agenda')
-const agendaDrawer = document.getElementById('agenda-drawer')
 const agendaStatus = document.getElementById('agenda-status')
 const agendaList = document.getElementById('agenda-list')
 const refreshAgendaButton = document.getElementById('refresh-agenda')
 const closeAgendaButton = document.getElementById('close-agenda')
 const toggleWorkItemsButton = document.getElementById('toggle-work-items')
-const workItemDrawer = document.getElementById('work-item-drawer')
 const workItemStatus = document.getElementById('work-item-status')
 const workItemList = document.getElementById('work-item-list')
 const syncWorkItemsButton = document.getElementById('sync-work-items')
 const closeWorkItemsButton = document.getElementById('close-work-items')
 const toggleKnowledgeButton = document.getElementById('toggle-knowledge')
-const knowledgeDrawer = document.getElementById('knowledge-drawer')
 const closeKnowledgeButton = document.getElementById('close-knowledge')
 const knowledgeStatus = document.getElementById('knowledge-status')
 const ideaInput = document.getElementById('idea-input')
@@ -39,8 +35,13 @@ const knowledgeResultMeta = document.getElementById('knowledge-result-meta')
 const knowledgeResults = document.getElementById('knowledge-results')
 const knowledgeLibraryCount = document.getElementById('knowledge-library-count')
 const knowledgeList = document.getElementById('knowledge-list')
+const workbenchTabs = Array.from(document.querySelectorAll('[data-workbench-tab]'))
+const workbenchPages = Array.from(document.querySelectorAll('[data-workbench-page]'))
+const validWorkbenchTabs = new Set(workbenchPages.map(page => page.dataset.workbenchPage))
 
 const state = {
+  activeTab: 'messages',
+  focusedTaskId: '',
   inbox: { messages: [], chats: [], loading: false, error: '', attentionCount: 0, updatedAt: '' },
   assistant: { results: {}, pending: [] },
   selectedId: '',
@@ -48,20 +49,16 @@ const state = {
   attentionOnly: true,
   draftEdits: new Map(),
   agenda: { events: [], count: 0, loading: false, error: '', updatedAt: '', range: {} },
-  agendaDrawerOpen: false,
   agentTasks: {
     tasks: [],
     todayTasks: [],
     counts: { total: 0, today: 0, running: 0, waiting: 0, done: 0, failed: 0 },
     updatedAt: '',
   },
-  agentTaskDrawerOpen: false,
   workItems: { items: [], count: 0, openCount: 0, runningCount: 0 },
-  workItemDrawerOpen: false,
   workItemBusy: new Set(),
   extractionBusy: new Set(),
   knowledge: { items: [], count: 0, summarizedCount: 0, ideaCount: 0 },
-  knowledgeDrawerOpen: false,
   knowledgeResults: [],
   knowledgeResultLabel: '',
   knowledgeSearching: false,
@@ -69,6 +66,23 @@ const state = {
 }
 
 let toastTimer = null
+
+function setActiveWorkbenchTab(tab, { taskId = '' } = {}) {
+  state.activeTab = validWorkbenchTabs.has(tab) ? tab : 'messages'
+  state.focusedTaskId = state.activeTab === 'tasks' ? String(taskId || state.focusedTaskId || '') : ''
+  render()
+}
+
+function renderWorkbenchNavigation() {
+  workbenchTabs.forEach((button) => {
+    const active = button.dataset.workbenchTab === state.activeTab
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-selected', active ? 'true' : 'false')
+  })
+  workbenchPages.forEach((page) => {
+    page.hidden = page.dataset.workbenchPage !== state.activeTab
+  })
+}
 
 function escapeHtml(value) {
   return String(value || '')
@@ -462,9 +476,6 @@ function renderAgentTasks() {
   const running = tasks.filter(task => task.status === 'running').length
   const done = tasks.filter(task => task.status === 'done').length
   toggleAgentTasksButton.textContent = `我的任务 ${tasks.length}`
-  toggleAgentTasksButton.classList.toggle('primary', state.agentTaskDrawerOpen)
-  toggleAgentTasksButton.classList.toggle('secondary', !state.agentTaskDrawerOpen)
-  agentTaskDrawer.hidden = !state.agentTaskDrawerOpen
   agentTaskStatus.textContent = `${running} 个进行中 · ${done} 个完成 · ${loose.length} 个待归组 Session${state.agentTasks.updatedAt ? ` · ${fmtTime(state.agentTasks.updatedAt)}` : ''}`
 
   if (!tasks.length && !loose.length) {
@@ -479,13 +490,16 @@ function renderAgentTasks() {
     const todos = Array.isArray(task.todos) ? task.todos : []
     sessions.sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
     return [
-      `<article class="agent-task-card" data-status="${escapeHtml(task.status)}">`,
+      `<article class="agent-task-card${state.focusedTaskId === task.id ? ' focused' : ''}" data-status="${escapeHtml(task.status)}" data-agent-task-id="${escapeHtml(task.id)}">`,
       '<div class="agent-task-title-row">',
       '<div>',
       `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
       `<p>${escapeHtml(agentTaskStatusLabel(task.status))} · ${sessions.length} Session · ${task.openTodoCount || 0} Todo</p>`,
       '</div>',
+      '<div class="agent-task-title-actions">',
       `<button type="button" data-agent-task-rename="${escapeHtml(task.id)}">重命名</button>`,
+      `<button class="danger" type="button" data-agent-task-delete="${escapeHtml(task.id)}">删除</button>`,
+      '</div>',
       '</div>',
       '<div class="agent-task-progress-row">',
       `<input type="range" min="0" max="100" step="5" value="${percent}" data-agent-task-progress="${escapeHtml(task.id)}" aria-label="任务进度 ${percent}%" />`,
@@ -521,6 +535,12 @@ function renderAgentTasks() {
     '</section>',
   ].join('')
   agentTaskList.innerHTML = taskCards + looseSection
+  if (state.activeTab === 'tasks' && state.focusedTaskId) {
+    requestAnimationFrame(() => {
+      const card = agentTaskList.querySelector(`[data-agent-task-id="${CSS.escape(state.focusedTaskId)}"]`)
+      card?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
+  }
 }
 
 function agentSessionByKey(key) {
@@ -633,6 +653,18 @@ async function renameAgentTask(taskId) {
   }
 }
 
+async function deleteAgentTask(taskId) {
+  const task = state.agentTasks.tasks.find(item => item.id === taskId)
+  if (!task) return
+  const confirmed = window.confirm(`删除任务“${task.title}”？\n\n关联 Session 会回到待归组，Session 记录不会丢失；该任务的 Todo 会被删除。`)
+  if (!confirmed) return
+  const deleted = await mutateAgentTasks(
+    () => window.pet.deleteAgentTaskGroup({ taskId }),
+    '任务已删除，Session 已回到待归组',
+  )
+  if (deleted) state.focusedTaskId = ''
+}
+
 function priorityLabel(value) {
   return {
     critical: 'P0 · 紧急',
@@ -685,9 +717,6 @@ function workItemAgentHtml(item) {
 function renderWorkItems() {
   const activeCount = state.workItems.items.filter(item => !['done', 'cancelled'].includes(item.status)).length
   toggleWorkItemsButton.textContent = `工作项 ${activeCount}`
-  toggleWorkItemsButton.classList.toggle('primary', state.workItemDrawerOpen)
-  toggleWorkItemsButton.classList.toggle('secondary', !state.workItemDrawerOpen)
-  workItemDrawer.hidden = !state.workItemDrawerOpen
   workItemStatus.textContent = `${activeCount} 个进行中 · ${state.workItems.items.length} 个全部`
 
   const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 }
@@ -753,9 +782,6 @@ function rsvpLabel(value) {
 function renderAgenda() {
   const events = state.agenda.events.slice().sort((a, b) => Date.parse(a.startAt || '') - Date.parse(b.startAt || ''))
   toggleAgendaButton.textContent = `会议 ${events.length}`
-  toggleAgendaButton.classList.toggle('primary', state.agendaDrawerOpen)
-  toggleAgendaButton.classList.toggle('secondary', !state.agendaDrawerOpen)
-  agendaDrawer.hidden = !state.agendaDrawerOpen
   refreshAgendaButton.disabled = state.agenda.loading
   refreshAgendaButton.textContent = state.agenda.loading ? '刷新中…' : '刷新日程'
   agendaStatus.textContent = state.agenda.error
@@ -828,9 +854,6 @@ function knowledgeSummaryHtml(item) {
 
 function renderKnowledge() {
   toggleKnowledgeButton.textContent = `知识库 ${state.knowledge.count}`
-  toggleKnowledgeButton.classList.toggle('primary', state.knowledgeDrawerOpen)
-  toggleKnowledgeButton.classList.toggle('secondary', !state.knowledgeDrawerOpen)
-  knowledgeDrawer.hidden = !state.knowledgeDrawerOpen
   knowledgeStatus.textContent = `${state.knowledge.count} 条内容 · ${state.knowledge.summarizedCount} 条已总结 · ${state.knowledge.ideaCount} 个想法`
   knowledgeLibraryCount.textContent = `${state.knowledge.count} 条`
 
@@ -893,6 +916,7 @@ function renderKnowledge() {
 }
 
 function render() {
+  renderWorkbenchNavigation()
   renderStatus()
   renderMessageList()
   renderDetail()
@@ -1020,7 +1044,7 @@ async function captureExtractedItem(kind, index, action = 'local') {
       followUp = await window.pet.runWorkItemAgent({ id, mode: action })
     }
     await refreshWorkItems()
-    state.workItemDrawerOpen = true
+    state.activeTab = 'work-items'
     render()
     if (followUp && !followUp.ok) {
       showToast(`操作失败：${followUp.error || '未知错误'}`)
@@ -1223,20 +1247,11 @@ detail.addEventListener('click', (event) => {
   }
 })
 
-toggleAgentTasksButton.addEventListener('click', () => {
-  state.agentTaskDrawerOpen = !state.agentTaskDrawerOpen
-  if (state.agentTaskDrawerOpen) {
-    state.workItemDrawerOpen = false
-    state.knowledgeDrawerOpen = false
-    state.agendaDrawerOpen = false
-  }
-  render()
+workbenchTabs.forEach((button) => {
+  button.addEventListener('click', () => setActiveWorkbenchTab(button.dataset.workbenchTab))
 })
 
-closeAgentTasksButton.addEventListener('click', () => {
-  state.agentTaskDrawerOpen = false
-  render()
-})
+closeAgentTasksButton.addEventListener('click', () => setActiveWorkbenchTab('messages'))
 
 refreshAgentTasksButton.addEventListener('click', refreshAgentTasks)
 createAgentTaskButton.addEventListener('click', createAgentTask)
@@ -1245,6 +1260,11 @@ agentTaskList.addEventListener('click', (event) => {
   const rename = event.target.closest('[data-agent-task-rename]')
   if (rename) {
     renameAgentTask(rename.dataset.agentTaskRename)
+    return
+  }
+  const deleteTask = event.target.closest('[data-agent-task-delete]')
+  if (deleteTask) {
+    deleteAgentTask(deleteTask.dataset.agentTaskDelete)
     return
   }
   const visibility = event.target.closest('[data-agent-session-visibility]')
@@ -1314,52 +1334,13 @@ agentTaskList.addEventListener('submit', async (event) => {
   if (added && input) input.value = ''
 })
 
-toggleWorkItemsButton.addEventListener('click', () => {
-  state.workItemDrawerOpen = !state.workItemDrawerOpen
-  if (state.workItemDrawerOpen) {
-    state.agentTaskDrawerOpen = false
-    state.knowledgeDrawerOpen = false
-    state.agendaDrawerOpen = false
-  }
-  render()
-})
-
-closeWorkItemsButton.addEventListener('click', () => {
-  state.workItemDrawerOpen = false
-  render()
-})
+closeWorkItemsButton.addEventListener('click', () => setActiveWorkbenchTab('messages'))
 
 syncWorkItemsButton.addEventListener('click', syncAllWorkItems)
 
-toggleKnowledgeButton.addEventListener('click', () => {
-  state.knowledgeDrawerOpen = !state.knowledgeDrawerOpen
-  if (state.knowledgeDrawerOpen) {
-    state.agentTaskDrawerOpen = false
-    state.workItemDrawerOpen = false
-    state.agendaDrawerOpen = false
-  }
-  render()
-})
+closeKnowledgeButton.addEventListener('click', () => setActiveWorkbenchTab('messages'))
 
-closeKnowledgeButton.addEventListener('click', () => {
-  state.knowledgeDrawerOpen = false
-  render()
-})
-
-toggleAgendaButton.addEventListener('click', () => {
-  state.agendaDrawerOpen = !state.agendaDrawerOpen
-  if (state.agendaDrawerOpen) {
-    state.agentTaskDrawerOpen = false
-    state.workItemDrawerOpen = false
-    state.knowledgeDrawerOpen = false
-  }
-  render()
-})
-
-closeAgendaButton.addEventListener('click', () => {
-  state.agendaDrawerOpen = false
-  render()
-})
+closeAgendaButton.addEventListener('click', () => setActiveWorkbenchTab('messages'))
 
 refreshAgendaButton.addEventListener('click', refreshAgenda)
 agendaList.addEventListener('click', (event) => {
@@ -1479,6 +1460,10 @@ window.pet.onAgentTaskBoardUpdate?.((tasks) => {
 window.pet.onKnowledgeUpdate?.((knowledge) => {
   state.knowledge = normalizeKnowledge(knowledge)
   render()
+})
+
+window.pet.onWorkbenchNavigate?.((request = {}) => {
+  setActiveWorkbenchTab(request.tab, { taskId: request.taskId })
 })
 
 Promise.all([

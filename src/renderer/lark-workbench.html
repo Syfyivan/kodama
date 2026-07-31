@@ -3,145 +3,302 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:*;" />
+      content="default-src 'self'; img-src 'self' data: file:; style-src 'self'; script-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:*;" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kodama 工作台</title>
     <link rel="stylesheet" href="./lark-workbench.css" />
   </head>
   <body>
-    <header class="workbench-header">
-      <div>
-        <p class="eyebrow">KODAMA WORKBENCH</p>
-        <h1>个人 AI 工作台</h1>
-        <p id="workbench-status" class="workbench-status">正在读取消息…</p>
-      </div>
-      <div class="header-actions">
-        <label class="attention-filter">
-          <input id="attention-only" type="checkbox" checked />
-          <span>只看私聊 / @我</span>
-        </label>
-        <button id="toggle-agent-tasks" class="secondary" type="button">Agent 任务 0</button>
-        <button id="toggle-agenda" class="secondary" type="button">会议 0</button>
-        <button id="toggle-work-items" class="secondary" type="button">工作项 0</button>
-        <button id="toggle-knowledge" class="secondary" type="button">知识库 0</button>
-        <button id="refresh-inbox" class="secondary" type="button">刷新消息</button>
-      </div>
-    </header>
-
-    <main class="workbench-shell">
-      <aside class="message-sidebar" aria-label="飞书消息">
-        <div class="sidebar-tools">
-          <input id="message-search" type="search" placeholder="搜索会话、发送人或内容" />
-          <span id="message-count">0 条</span>
-        </div>
-        <div id="message-list" class="message-list empty">暂无需处理消息</div>
-      </aside>
-
-      <section id="message-detail" class="message-detail empty">
-        <div class="empty-state">
-          <strong>选择一条消息</strong>
-          <p>私聊和 @ 你的消息会优先显示在左侧。</p>
-        </div>
-      </section>
-    </main>
-
-    <aside id="agent-task-drawer" class="work-item-drawer agent-task-drawer" hidden aria-label="我的今日任务">
-      <div class="work-item-drawer-head">
-        <div>
-          <p class="eyebrow">MY TASKS → SESSIONS</p>
-          <h2>我的今日任务</h2>
-          <p id="agent-task-status">正在读取任务进度…</p>
-        </div>
-        <div class="work-item-drawer-actions">
-          <button id="create-agent-task" class="primary" type="button">＋ 新建任务</button>
-          <button id="refresh-agent-tasks" class="secondary" type="button">刷新</button>
-          <button id="close-agent-tasks" class="quiet" type="button" aria-label="关闭 Agent 任务">关闭</button>
-        </div>
-      </div>
-      <div class="agent-task-help">
-        任务是你今天要完成的真实事项，可以包含多个 Session。任务进度由你独立维护；Session 只显示状态和过程，不参与任务百分比计算。
-      </div>
-      <div id="agent-task-list" class="agent-task-list empty">暂无我的今日任务</div>
-    </aside>
-
-    <aside id="agenda-drawer" class="work-item-drawer agenda-drawer" hidden aria-label="近期会议">
-      <div class="work-item-drawer-head">
-        <div>
-          <p class="eyebrow">CALENDAR</p>
-          <h2>近期会议</h2>
-          <p id="agenda-status">正在读取飞书日程…</p>
-        </div>
-        <div class="work-item-drawer-actions">
-          <button id="refresh-agenda" class="secondary" type="button">刷新日程</button>
-          <button id="close-agenda" class="quiet" type="button" aria-label="关闭近期会议">关闭</button>
-        </div>
-      </div>
-      <div id="agenda-list" class="work-item-list agenda-list empty">暂无近期会议</div>
-    </aside>
-
-    <aside id="work-item-drawer" class="work-item-drawer" hidden aria-label="工作项">
-      <div class="work-item-drawer-head">
-        <div>
-          <p class="eyebrow">TASKS + AGENT</p>
-          <h2>工作项</h2>
-          <p id="work-item-status">0 个进行中</p>
-        </div>
-        <div class="work-item-drawer-actions">
-          <button id="sync-work-items" class="secondary" type="button">同步飞书任务</button>
-          <button id="close-work-items" class="quiet" type="button" aria-label="关闭工作项">关闭</button>
-        </div>
-      </div>
-      <div id="work-item-list" class="work-item-list empty">暂无工作项</div>
-    </aside>
-
-    <aside id="knowledge-drawer" class="knowledge-drawer" hidden aria-label="个人知识库">
-      <div class="knowledge-drawer-head">
-        <div>
-          <p class="eyebrow">READING + IDEAS</p>
-          <h2>个人知识库</h2>
-          <p id="knowledge-status">0 条内容</p>
-        </div>
-        <button id="close-knowledge" class="quiet" type="button" aria-label="关闭知识库">关闭</button>
-      </div>
-
-      <div class="knowledge-tools">
-        <section class="idea-capture">
-          <textarea id="idea-input" aria-label="记录想法" placeholder="记下一个想法、判断或待继续探索的问题…"></textarea>
+    <div class="workbench-app">
+      <header class="workbench-header">
+        <div class="workbench-brand">
+          <span class="brand-mark" aria-hidden="true">🌱</span>
           <div>
-            <button id="save-idea" class="primary" type="button">保存想法</button>
-            <button id="capture-clipboard" class="secondary" type="button">收集剪贴板</button>
-            <button id="open-x-feed" class="secondary" type="button">打开 X</button>
+            <p class="eyebrow">KODAMA WORKBENCH</p>
+            <h1>个人 AI 工作台</h1>
+            <p id="workbench-status" class="workbench-status">正在读取消息…</p>
           </div>
-        </section>
-
-        <section class="knowledge-search">
-          <input id="knowledge-query" type="search" placeholder="输入关注主题；GitHub 留空看近 7 天新项目" />
-          <div>
-            <button type="button" data-knowledge-source="bytetech">ByteTech</button>
-            <button type="button" data-knowledge-source="github">GitHub 热门</button>
-            <button type="button" data-knowledge-source="lark">飞书文档</button>
-          </div>
-        </section>
-
-        <section id="knowledge-results-section" class="knowledge-results-section" hidden>
-          <div class="knowledge-section-head">
-            <h3>搜索结果</h3>
-            <span id="knowledge-result-meta"></span>
-          </div>
-          <div id="knowledge-results" class="knowledge-results"></div>
-        </section>
-      </div>
-
-      <div class="knowledge-library">
-        <div class="knowledge-section-head">
-          <h3>已沉淀</h3>
-          <span id="knowledge-library-count">0 条</span>
         </div>
-        <div id="knowledge-list" class="knowledge-list empty">还没有内容</div>
+        <div class="workbench-header-note">
+          <strong>所有工作，一处切换</strong>
+          <span>桌宠只做轻量提醒，复杂操作都在这里完成</span>
+        </div>
+      </header>
+
+      <nav class="workbench-tabs" aria-label="工作台模块">
+        <button class="active" type="button" data-workbench-tab="messages">消息</button>
+        <button id="toggle-agent-tasks" type="button" data-workbench-tab="tasks">我的任务 0</button>
+        <button id="toggle-work-items" type="button" data-workbench-tab="work-items">工作项 0</button>
+        <button id="toggle-bridge" type="button" data-workbench-tab="bridge">Bridge</button>
+        <button id="toggle-agenda" type="button" data-workbench-tab="agenda">会议 0</button>
+        <button id="toggle-knowledge" type="button" data-workbench-tab="knowledge">知识库 0</button>
+        <button id="toggle-settings" type="button" data-workbench-tab="settings">设置</button>
+      </nav>
+
+      <div class="workbench-pages">
+        <section class="workspace-page messages-page" data-workbench-page="messages" aria-label="飞书消息">
+          <div class="page-toolbar messages-toolbar">
+            <div>
+              <strong>飞书消息管理器</strong>
+              <span>优先处理私聊和 @ 你的消息</span>
+            </div>
+            <div class="page-toolbar-actions">
+              <label class="attention-filter">
+                <input id="attention-only" type="checkbox" checked />
+                <span>只看私聊 / @我</span>
+              </label>
+              <button id="refresh-inbox" class="secondary" type="button">刷新消息</button>
+            </div>
+          </div>
+          <main class="workbench-shell">
+            <aside class="message-sidebar" aria-label="飞书消息列表">
+              <div class="sidebar-tools">
+                <input id="message-search" type="search" placeholder="搜索会话、发送人或内容" />
+                <span id="message-count">0 条</span>
+              </div>
+              <div id="message-list" class="message-list empty">暂无需处理消息</div>
+            </aside>
+
+            <section id="message-detail" class="message-detail empty">
+              <div class="empty-state">
+                <strong>选择一条消息</strong>
+                <p>私聊和 @ 你的消息会优先显示在左侧。</p>
+              </div>
+            </section>
+          </main>
+        </section>
+
+        <section id="agent-task-drawer" class="workspace-page task-page" data-workbench-page="tasks" hidden aria-label="我的今日任务">
+          <div class="workspace-page-head">
+            <div>
+              <p class="eyebrow">MY TASKS → SESSIONS</p>
+              <h2>我的今日任务</h2>
+              <p id="agent-task-status">正在读取任务进度…</p>
+            </div>
+            <div class="workspace-page-actions">
+              <button id="create-agent-task" class="primary" type="button">＋ 新建任务</button>
+              <button id="refresh-agent-tasks" class="secondary" type="button">刷新</button>
+              <button id="close-agent-tasks" class="quiet" type="button">回到消息</button>
+            </div>
+          </div>
+          <div class="agent-task-help">
+            任务是你今天要完成的真实事项，可以包含多个 Session。任务进度由你独立维护；Session 只显示状态和过程，不参与任务百分比计算。
+          </div>
+          <div id="agent-task-list" class="agent-task-list empty">暂无我的今日任务</div>
+        </section>
+
+        <section id="work-item-drawer" class="workspace-page" data-workbench-page="work-items" hidden aria-label="工作项">
+          <div class="workspace-page-head">
+            <div>
+              <p class="eyebrow">TASKS + AGENT</p>
+              <h2>工作项</h2>
+              <p id="work-item-status">0 个进行中</p>
+            </div>
+            <div class="workspace-page-actions">
+              <button id="sync-work-items" class="secondary" type="button">同步飞书任务</button>
+              <button id="close-work-items" class="quiet" type="button">回到消息</button>
+            </div>
+          </div>
+          <div id="work-item-list" class="work-item-list empty">暂无工作项</div>
+        </section>
+
+        <section class="workspace-page bridge-workspace" data-workbench-page="bridge" hidden aria-label="Bridge 任务">
+          <header class="bridge-header">
+            <div>
+              <p class="eyebrow">AGENT EXECUTION</p>
+              <h2>Bridge 任务详情</h2>
+              <p id="bridge-task-status">正在连接本机 Bridge...</p>
+            </div>
+            <div class="bridge-toolbar">
+              <label>
+                <span>数量</span>
+                <input id="task-limit" type="number" min="1" max="200" step="1" value="100" />
+              </label>
+              <button id="refresh-tasks" class="secondary" type="button">刷新</button>
+              <button id="share-viewer" class="secondary" type="button">分享全部</button>
+            </div>
+          </header>
+
+          <section class="bridge-summary-grid" aria-label="Bridge 任务统计">
+            <button type="button" data-filter="all"><strong id="count-all">0</strong><span>全部</span></button>
+            <button type="button" data-filter="running"><strong id="count-running">0</strong><span>运行中</span></button>
+            <button type="button" data-filter="waiting"><strong id="count-waiting">0</strong><span>待交互</span></button>
+            <button type="button" data-filter="done"><strong id="count-done">0</strong><span>完成</span></button>
+            <button type="button" data-filter="failed"><strong id="count-failed">0</strong><span>失败</span></button>
+          </section>
+
+          <main class="bridge-task-layout">
+            <aside class="bridge-task-list-panel">
+              <div class="bridge-list-head">
+                <strong>任务</strong>
+                <input id="task-search" type="search" placeholder="搜索标题 / 群 / cwd" />
+              </div>
+              <div id="task-list" class="task-list empty">暂无任务</div>
+            </aside>
+            <section id="task-detail" class="task-detail empty">
+              <div class="empty-state">选择一个任务查看详情</div>
+            </section>
+          </main>
+        </section>
+
+        <section id="agenda-drawer" class="workspace-page" data-workbench-page="agenda" hidden aria-label="近期会议">
+          <div class="workspace-page-head">
+            <div>
+              <p class="eyebrow">CALENDAR</p>
+              <h2>近期会议</h2>
+              <p id="agenda-status">正在读取飞书日程…</p>
+            </div>
+            <div class="workspace-page-actions">
+              <button id="refresh-agenda" class="secondary" type="button">刷新日程</button>
+              <button id="close-agenda" class="quiet" type="button">回到消息</button>
+            </div>
+          </div>
+          <div id="agenda-list" class="work-item-list agenda-list empty">暂无近期会议</div>
+        </section>
+
+        <section id="knowledge-drawer" class="workspace-page knowledge-page" data-workbench-page="knowledge" hidden aria-label="个人知识库">
+          <div class="workspace-page-head">
+            <div>
+              <p class="eyebrow">READING + IDEAS</p>
+              <h2>个人知识库</h2>
+              <p id="knowledge-status">0 条内容</p>
+            </div>
+            <button id="close-knowledge" class="quiet" type="button">回到消息</button>
+          </div>
+
+          <div class="knowledge-tools">
+            <section class="idea-capture">
+              <textarea id="idea-input" aria-label="记录想法" placeholder="记下一个想法、判断或待继续探索的问题…"></textarea>
+              <div>
+                <button id="save-idea" class="primary" type="button">保存想法</button>
+                <button id="capture-clipboard" class="secondary" type="button">收集剪贴板</button>
+                <button id="open-x-feed" class="secondary" type="button">打开 X</button>
+              </div>
+            </section>
+
+            <section class="knowledge-search">
+              <input id="knowledge-query" type="search" placeholder="输入关注主题；GitHub 留空看近 7 天新项目" />
+              <div>
+                <button type="button" data-knowledge-source="bytetech">ByteTech</button>
+                <button type="button" data-knowledge-source="github">GitHub 热门</button>
+                <button type="button" data-knowledge-source="lark">飞书文档</button>
+              </div>
+            </section>
+
+            <section id="knowledge-results-section" class="knowledge-results-section" hidden>
+              <div class="knowledge-section-head">
+                <h3>搜索结果</h3>
+                <span id="knowledge-result-meta"></span>
+              </div>
+              <div id="knowledge-results" class="knowledge-results"></div>
+            </section>
+          </div>
+
+          <div class="knowledge-library">
+            <div class="knowledge-section-head">
+              <h3>已沉淀</h3>
+              <span id="knowledge-library-count">0 条</span>
+            </div>
+            <div id="knowledge-list" class="knowledge-list empty">还没有内容</div>
+          </div>
+        </section>
+
+        <section class="workspace-page settings-page" data-workbench-page="settings" hidden aria-label="桌宠设置">
+          <div class="workspace-page-head">
+            <div>
+              <p class="eyebrow">PET + APP SETTINGS</p>
+              <h2>Kodama 设置</h2>
+              <p>修改会实时同步到桌宠，不再打开单独的管理窗口。</p>
+            </div>
+            <div id="status" class="settings-status">正在连接桌宠…</div>
+          </div>
+
+          <div class="settings-grid">
+            <section class="settings-card settings-card-wide">
+              <h3>外观</h3>
+              <div class="settings-row"><label>大小</label><input id="petScale" type="range" min="40" max="125" /><span class="settings-value" id="petScaleV"></span></div>
+              <div class="settings-row"><label>透明度</label><input id="petOpacity" type="range" min="25" max="100" /><span class="settings-value" id="petOpacityV"></span></div>
+              <div class="settings-row"><label>点击范围</label><input id="hitboxScale" type="range" min="25" max="100" /><span class="settings-value" id="hitboxScaleV"></span></div>
+              <div class="settings-row"><label>气泡高度</label><input id="bubbleAnchor" type="range" min="35" max="80" /><span class="settings-value" id="bubbleAnchorV"></span></div>
+              <div class="settings-row"><label>气泡间距</label><input id="bubbleGap" type="range" min="0" max="48" /><span class="settings-value" id="bubbleGapV"></span></div>
+              <div class="settings-row"><label>触发键</label><div class="settings-segment" id="triggerMode"><button data-v="right">右键</button><button data-v="left">左键</button></div><span></span></div>
+              <div class="settings-row"><label>贴边</label><div class="settings-segment" id="edgeMode"><button data-v="half">半露</button><button data-v="inside">屏内</button></div><span></span></div>
+            </section>
+
+            <section class="settings-card">
+              <h3>行为</h3>
+              <div class="settings-toggle"><span>双击摸摸</span><button class="settings-switch" id="pettingEnabled" type="button"></button></div>
+              <div class="settings-toggle"><span>自动游走</span><button class="settings-switch" id="wanderEnabled" type="button"></button></div>
+              <div class="settings-toggle"><span>勿扰模式</span><button class="settings-switch" id="dndMode" type="button"></button></div>
+              <div class="settings-toggle"><span>声音</span><button class="settings-switch" id="soundEnabled" type="button"></button></div>
+              <div class="settings-toggle"><span>系统通知</span><button class="settings-switch" id="notificationsEnabled" type="button"></button></div>
+              <div class="settings-toggle"><span>语音播报</span><button class="settings-switch" id="ttsEnabled" type="button"></button></div>
+            </section>
+
+            <section class="settings-card">
+              <h3>番茄钟（分钟）</h3>
+              <div class="settings-number"><span>专注时长</span><input id="focusMinutes" type="number" min="1" max="180" /></div>
+              <div class="settings-number"><span>短休</span><input id="shortBreakMinutes" type="number" min="1" max="60" /></div>
+              <div class="settings-number"><span>长休</span><input id="longBreakMinutes" type="number" min="1" max="120" /></div>
+              <div class="settings-number"><span>长休间隔</span><input id="longBreakEvery" type="number" min="1" max="12" /></div>
+              <div class="settings-number"><span>久坐提醒（0=关）</span><input id="sedentaryMinutes" type="number" min="0" max="240" /></div>
+            </section>
+
+            <section class="settings-card settings-card-wide">
+              <h3>更新</h3>
+              <div class="settings-update-row">
+                <div>
+                  <strong id="updateStatusText">正在读取更新状态...</strong>
+                  <p>安装版启动后会自动检查；本地开发版不走安装版更新器。</p>
+                </div>
+                <div>
+                  <button id="checkUpdate" class="secondary" type="button">检查更新</button>
+                  <button id="installUpdate" class="primary" type="button" hidden>安装更新</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="settings-card">
+              <h3>互动 / 成长</h3>
+              <div class="settings-toggle"><span>摸摸桌宠</span><button id="petAction" class="secondary" type="button">摸摸 🐾</button></div>
+              <div class="settings-toggle"><span>主动投喂</span><button id="feedPet" class="secondary" type="button">投喂 🍖</button></div>
+              <p class="settings-muted">Agent 使用会积累成长资源；投喂可以把食物换成经验。</p>
+            </section>
+
+            <section class="settings-card">
+              <h3>统计</h3>
+              <div class="settings-stats">
+                <div><b id="statLevel">–</b><span>等级</span></div>
+                <div><b id="statFood">–</b><span>食物</span></div>
+                <div><b id="statExp">–</b><span>经验</span></div>
+                <div><b id="tokToday">–</b><span>今日 token</span></div>
+                <div><b id="tok7">–</b><span>近 7 天</span></div>
+                <div><b id="tokTotal">–</b><span>累计</span></div>
+              </div>
+              <p class="settings-muted" id="tokSplit"></p>
+            </section>
+
+            <section class="settings-card settings-card-wide" id="evoCard">
+              <h3>进化图鉴</h3>
+              <div class="evo-grid" id="evoGrid"></div>
+              <p class="settings-muted" id="evoNote"></p>
+            </section>
+
+            <section class="settings-card settings-card-wide">
+              <div class="settings-shop-head">
+                <h3>配饰商店</h3>
+                <span>可用经验 <b id="shopExp">–</b>⭐</span>
+              </div>
+              <div class="shop-grid" id="shopGrid"></div>
+            </section>
+          </div>
+        </section>
       </div>
-    </aside>
+    </div>
 
     <div id="workbench-toast" class="toast" hidden></div>
     <script src="./lark-workbench.js"></script>
+    <script type="module" src="./bridge-tasks.js"></script>
+    <script type="module" src="./manage.js"></script>
   </body>
 </html>

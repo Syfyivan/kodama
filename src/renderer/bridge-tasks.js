@@ -23,26 +23,7 @@ const state = {
   error: '',
   updatedAt: '',
 }
-let bridgeRequest = {}
-
-async function importLocal(path) {
-  try {
-    return await import(path)
-  } catch (error) {
-    const message = String(error?.message || error)
-    if (/not found|failed to fetch|cannot find|err_module_not_found/i.test(message)) return null
-    updateStatus(`${path} 配置读取失败：${message}`)
-    return null
-  }
-}
-
-async function loadBridgeConfig() {
-  const agent = (await importLocal('./config/agent.local.js'))?.AGENT || {}
-  bridgeRequest = {
-    bridgeUrl: agent.bridgeUrl || '',
-    token: agent.token || '',
-  }
-}
+const bridgeRequest = {}
 
 function escapeHtml(text) {
   return String(text || '')
@@ -423,4 +404,4 @@ taskDetail.addEventListener('click', (event) => {
   if (action === 'copy-id') copySelectedId()
 })
 
-loadBridgeConfig().finally(refreshTasks)
+refreshTasks()
