@@ -167,6 +167,15 @@ function viewIdFromCreate(result) {
   )
 }
 
+function fieldIdFromCreate(result) {
+  return firstString(
+    result?.data?.field?.id,
+    result?.data?.field?.field_id,
+    result?.field?.id,
+    result?.field?.field_id,
+  )
+}
+
 function firstViewIdFromList(result) {
   return firstString(
     result?.data?.items?.[0]?.view_id,
@@ -181,7 +190,14 @@ function printConfig(config) {
   console.log(JSON.stringify({ ...config, baseToken: `${config.baseToken.slice(0, 8)}...` }, null, 2))
 }
 
-function setVisibleFields(targetTableId, viewId) {
+function visibleFieldsFrom(result) {
+  const values = result?.data?.visible_fields
+    || result?.visible_fields
+    || []
+  return Array.isArray(values) ? values.map(value => String(value || '').trim()).filter(Boolean) : []
+}
+
+function setVisibleFields(targetTableId, viewId, viewName, hiddenFieldIds) {
   if (!viewId) return
   const visibleArgs = [
     'base',
@@ -199,9 +215,47 @@ function setVisibleFields(targetTableId, viewId) {
   ]
   if (dryRun) visibleArgs.push('--dry-run')
   runLarkCli(visibleArgs, { allowNoop: true })
+  if (dryRun) return
+
+  const current = runLarkCli([
+    'base',
+    '+view-get-visible-fields',
+    '--as',
+    'user',
+    '--base-token',
+    baseToken,
+    '--table-id',
+    targetTableId,
+    '--view-id',
+    viewId,
+    '--format',
+    'json',
+  ])
+  const visible = visibleFieldsFrom(current)
+  const hiddenFieldNames = ['消息ID', 'chat_id', 'sender_id', 'thread_id', '归档时间']
+  if (!hiddenFieldNames.some(fieldName => visible.includes(fieldName))) return
+  if (!hiddenFieldIds.length) {
+    throw new Error(`view ${viewName} still exposes internal fields and no field IDs are available`)
+  }
+
+  // lark-cli 1.0.78 can return 800070003 (no-op) without applying the
+  // visible_fields mutation. Read back first, then use the equivalent raw API
+  // only when the wrapper left internal fields visible.
+  runLarkCli([
+    'api',
+    'PATCH',
+    `/open-apis/bitable/v1/apps/${baseToken}/tables/${targetTableId}/views/${viewId}`,
+    '--as',
+    'user',
+    '--data',
+    JSON.stringify({
+      view_name: viewName,
+      property: { hidden_fields: hiddenFieldIds },
+    }),
+  ])
 }
 
-function configureReadableViews(targetTableId, tableCreateResult) {
+function configureReadableViews(targetTableId, tableCreateResult, hiddenFieldIds) {
   const defaultViewId = dryRun
     ? 'Grid View'
     : firstString(defaultViewIdFrom(tableCreateResult), firstViewIdFromList(runLarkCli([
@@ -250,7 +304,7 @@ function configureReadableViews(targetTableId, tableCreateResult) {
     ]
     if (dryRun) sortArgs.push('--dry-run')
     runLarkCli(sortArgs)
-    setVisibleFields(targetTableId, defaultViewId)
+    setVisibleFields(targetTableId, defaultViewId, '最近消息', hiddenFieldIds)
   }
 
   console.log('\nCreating view: 按群查看')
@@ -304,7 +358,7 @@ function configureReadableViews(targetTableId, tableCreateResult) {
   ]
   if (dryRun) groupSortArgs.push('--dry-run')
   runLarkCli(groupSortArgs)
-  setVisibleFields(targetTableId, groupViewId)
+  setVisibleFields(targetTableId, groupViewId, '按群查看', hiddenFieldIds)
 }
 
 const baseArgs = ['base', '+base-create', '--as', 'user', '--name', name, '--time-zone', 'Asia/Shanghai']
@@ -349,6 +403,7 @@ if (tableId) {
 }
 
 if (!bindOnly) {
+  const fieldIdsByName = new Map()
   for (const field of fields) {
     console.log(`\nCreating field: ${field.field_name}`)
     const fieldArgs = [
@@ -364,10 +419,14 @@ if (!bindOnly) {
       JSON.stringify(field),
     ]
     if (dryRun) fieldArgs.push('--dry-run')
-    runLarkCli(fieldArgs)
+    const fieldResult = runLarkCli(fieldArgs)
+    fieldIdsByName.set(field.field_name, dryRun ? field.field_name : fieldIdFromCreate(fieldResult))
   }
 
-  configureReadableViews(tableId, tableResult)
+  const hiddenFieldIds = ['消息ID', 'chat_id', 'sender_id', 'thread_id', '归档时间']
+    .map(fieldName => fieldIdsByName.get(fieldName))
+    .filter(Boolean)
+  configureReadableViews(tableId, tableResult, hiddenFieldIds)
 }
 
 const config = {
