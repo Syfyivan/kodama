@@ -2592,9 +2592,9 @@ body.move-mode #pet-gif {
 
 /* Notifications keep the same soft material language without losing status. */
 #bubble {
-  gap: 5px;
-  width: min(320px, calc(100vw - 20px));
-  max-height: min(46vh, 300px);
+  gap: 4px;
+  width: min(292px, calc(100vw - 20px));
+  max-height: min(44vh, 280px);
   color: var(--kodama-ink);
   font-family: var(--kodama-font);
   scrollbar-color: color-mix(in srgb, var(--kodama-accent) 48%, transparent) transparent;
@@ -2669,6 +2669,206 @@ body.move-mode #pet-gif {
   color: var(--kodama-accent-deep);
   border-color: color-mix(in srgb, var(--kodama-accent) 48%, transparent);
   background: white;
+}
+
+/* Compact task groups mirror the user's task -> Session sketch. The task owns
+   its progress; nested Session rows only show status and current activity. */
+.bubble-card.bubble-user-task,
+.bubble-card.bubble-loose-session-group {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--kodama-accent) 24%, var(--kodama-border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--kodama-surface-raised) 96%, var(--kodama-accent-soft));
+  box-shadow: 0 7px 20px rgba(36, 58, 48, 0.12), inset 0 1px rgba(255, 255, 255, 0.86);
+}
+
+.bubble-card.bubble-loose-session-group {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--kodama-surface-soft) 92%, var(--kodama-accent-soft));
+}
+
+.bubble-task-group-head,
+.bubble-loose-session-head,
+.bubble-task-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.bubble-task-title {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 7px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.bubble-task-title > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--kodama-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--kodama-accent) 13%, transparent);
+}
+
+.bubble-user-task[data-status="done"] .bubble-task-title > span {
+  background: var(--kodama-success);
+}
+
+.bubble-user-task[data-status="waiting"] .bubble-task-title > span {
+  background: var(--kodama-hatch);
+}
+
+.bubble-user-task[data-status="failed"] .bubble-task-title > span {
+  background: #c85b5b;
+}
+
+.bubble-task-title strong,
+.bubble-loose-session-head strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--kodama-ink);
+  font-size: 10.5px;
+  font-weight: 720;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-task-group-head > button,
+.bubble-loose-session-head > button,
+.bubble-task-more,
+.bubble-task-session-ignore {
+  flex: none;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--kodama-border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--kodama-ink-muted);
+  font: 7.5px/1 var(--kodama-font);
+}
+
+.bubble-task-summary {
+  margin-top: 4px;
+  color: var(--kodama-ink-muted);
+  font-size: 8px;
+}
+
+.bubble-task-summary strong {
+  color: var(--kodama-accent-deep);
+  font-size: 8.5px;
+}
+
+.bubble-user-task-progress {
+  height: 3px;
+  margin-top: 4px;
+}
+
+.bubble-user-task-next {
+  margin-top: 4px;
+  font-size: 7.5px;
+}
+
+.bubble-task-session-list {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.bubble-task-session {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px;
+  border: 1px solid color-mix(in srgb, var(--kodama-border) 88%, transparent);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.66);
+  cursor: grab;
+}
+
+.bubble-task-session.dragging {
+  opacity: 0.45;
+}
+
+.bubble-task-session-main {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.bubble-task-session-main:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.bubble-task-session-main strong,
+.bubble-task-session-main span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-task-session-main strong {
+  color: var(--kodama-ink-soft);
+  font-size: 8.5px;
+  font-weight: 680;
+  line-height: 1.25;
+}
+
+.bubble-task-session-main span {
+  margin-top: 2px;
+  color: var(--kodama-ink-muted);
+  font-size: 7.5px;
+  line-height: 1.2;
+}
+
+.bubble-task-session-ignore {
+  align-self: start;
+  padding-inline: 5px;
+}
+
+.bubble-task-session-empty,
+.bubble-task-more {
+  width: 100%;
+  min-width: 0;
+  color: var(--kodama-ink-muted);
+  text-align: center;
+}
+
+.bubble-task-session-empty {
+  padding: 6px;
+  border: 1px dashed var(--kodama-border);
+  border-radius: 9px;
+  font-size: 7.5px;
+}
+
+.bubble-task-more {
+  background: transparent;
+}
+
+.bubble-loose-session-head > div {
+  min-width: 0;
+}
+
+.bubble-loose-session-head span {
+  display: block;
+  margin-top: 2px;
+  color: var(--kodama-ink-muted);
+  font-size: 7.5px;
 }
 
 #bubble-hover-tip {

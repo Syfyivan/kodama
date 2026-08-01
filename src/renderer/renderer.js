@@ -197,10 +197,12 @@ const BUBBLE_ACTION_DEBOUNCE_MS = 600
 const ACTIVE_TARGET_TTL_MS = 10 * 60 * 1000
 const TRACKED_TASK_EVENT_TYPES = new Set(['session_title', 'task_started', 'task_progress', 'task_waiting', 'task_done', 'task_failed', 'agent_done'])
 const FLOATING_PADDING = 8
-const BUBBLE_WIDTH = 320
+const BUBBLE_WIDTH = 292
 const PANEL_WIDTH = 340
-const BUBBLE_MAX_HEIGHT = 300
+const BUBBLE_MAX_HEIGHT = 280
 const PANEL_MAX_HEIGHT = 440
+const BUBBLE_TASK_SESSION_LIMIT = 3
+const BUBBLE_LOOSE_SESSION_LIMIT = 4
 let bridgeTasksSharePending = false
 let bridgeTasksState = {
   loading: false,
@@ -1398,6 +1400,23 @@ function setupInteraction() {
       renderBubbles()
       return
     }
+    const sessionVisibility = e.target.closest?.('[data-bubble-session-visibility]')
+    if (sessionVisibility) {
+      if (areBubbleActionsCoolingDown()) return
+      debounceBubbleActions()
+      const sessionKey = sessionVisibility.dataset.bubbleSessionVisibility || ''
+      const ignored = sessionVisibility.dataset.ignored !== 'true'
+      if (sessionKey) {
+        runAgentTaskMutation(() => window.pet.ignoreAgentSession?.({ sessionKey, ignored }))
+      }
+      return
+    }
+    const sessionOpen = e.target.closest?.('[data-bubble-session-open]')
+    if (sessionOpen) {
+      const session = agentSessionByKey(sessionOpen.dataset.bubbleSessionOpen)
+      if (session?.target) openTarget(session.target)
+      return
+    }
     const dismiss = e.target.closest?.('[data-dismiss-bubble]')
     if (dismiss) {
       if (areBubbleActionsCoolingDown()) return
@@ -2069,24 +2088,70 @@ function userTaskBubbleTasks() {
 
 function userTaskBubbleHtml(task) {
   const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
-  const sessions = Array.isArray(task.sessions) ? task.sessions : []
+  const sessions = (Array.isArray(task.sessions) ? task.sessions : [])
+    .filter(session => session.ignored !== true)
+    .slice()
+    .sort((a, b) => Date.parse(b.updatedAt || '') - Date.parse(a.updatedAt || ''))
+  const visibleSessions = sessions.slice(0, BUBBLE_TASK_SESSION_LIMIT)
   const nextTodo = (task.todos || []).find(todo => todo.done !== true)
-  const current = nextTodo?.text || task.currentStep || ''
+  const moreSessions = Math.max(0, sessions.length - visibleSessions.length)
   return [
-    `<article class="bubble-card bubble-user-task" data-user-task-id="${escapeHtml(task.id)}" data-agent-task-drop="${escapeHtml(task.id)}">`,
-    '<div class="bubble-head">',
-    `<strong>任务 · ${escapeHtml(task.title || '未命名任务')}</strong>`,
-    '<div class="bubble-actions">',
+    `<article class="bubble-card bubble-user-task" data-status="${escapeHtml(task.status)}" data-user-task-id="${escapeHtml(task.id)}" data-agent-task-drop="${escapeHtml(task.id)}">`,
+    '<div class="bubble-task-group-head">',
+    '<div class="bubble-task-title">',
+    '<span aria-hidden="true"></span>',
+    `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
+    '</div>',
     `<button type="button" data-open-user-task="${escapeHtml(task.id)}">编辑</button>`,
     '</div>',
-    '</div>',
-    '<div class="bubble-user-task-meta">',
+    '<div class="bubble-task-summary">',
     `<span>${escapeHtml(agentTaskStatusLabel(task.status))} · ${sessions.length} Session · ${task.openTodoCount || 0} Todo</span>`,
     `<strong>${percent}%</strong>`,
     '</div>',
     `<progress class="bubble-user-task-progress" max="100" value="${percent}" aria-label="任务进度 ${percent}%"></progress>`,
-    current ? `<div class="bubble-user-task-next">${escapeHtml(shortText(current, 58))}</div>` : '',
+    nextTodo ? `<div class="bubble-user-task-next">下一步：${escapeHtml(shortText(nextTodo.text, 42))}</div>` : '',
+    '<div class="bubble-task-session-list">',
+    ...(visibleSessions.length
+      ? visibleSessions.map(session => bubbleTaskSessionHtml(session))
+      : ['<div class="bubble-task-session-empty">暂无 Session，可把待归组卡片拖到这里</div>']),
+    moreSessions ? `<button class="bubble-task-more" type="button" data-open-user-task="${escapeHtml(task.id)}">另有 ${moreSessions} 个 Session</button>` : '',
+    '</div>',
     '</article>',
+  ].join('')
+}
+
+function bubbleTaskSessionHtml(session) {
+  const sessionKey = String(session?.key || '')
+  const source = agentSessionSourceLabel(session)
+  const title = shortText(session?.title || session?.agent || 'Session', 32)
+  const current = shortText(session?.currentStep || (session?.status === 'done' ? '已完成' : '准备执行'), 44)
+  const status = agentTaskStatusLabel(session?.status)
+  return [
+    `<article class="bubble-task-session" data-status="${escapeHtml(session?.status || '')}"${sessionKey ? ` draggable="true" data-agent-session-drag="${escapeHtml(sessionKey)}"` : ''}>`,
+    `<button class="bubble-task-session-main" type="button" data-bubble-session-open="${escapeHtml(sessionKey)}"${session?.target ? '' : ' disabled'} title="${escapeHtml(session?.currentStep || title)}">`,
+    `<strong>${escapeHtml(source)} · ${escapeHtml(title)}</strong>`,
+    `<span>${escapeHtml(status)}${current ? ` · ${escapeHtml(current)}` : ''}</span>`,
+    '</button>',
+    `<button class="bubble-task-session-ignore" type="button" data-bubble-session-visibility="${escapeHtml(sessionKey)}" data-ignored="false">忽略</button>`,
+    '</article>',
+  ].join('')
+}
+
+function looseSessionBubbleHtml(sessions) {
+  const visibleSessions = sessions.slice(0, BUBBLE_LOOSE_SESSION_LIMIT)
+  const moreSessions = Math.max(0, sessions.length - visibleSessions.length)
+  if (!visibleSessions.length) return ''
+  return [
+    '<section class="bubble-card bubble-loose-session-group">',
+    '<div class="bubble-loose-session-head">',
+    '<div><strong>待归组 Session</strong><span>拖到上面的任务中</span></div>',
+    '<button type="button" data-open-user-task="">整理</button>',
+    '</div>',
+    '<div class="bubble-task-session-list">',
+    ...visibleSessions.map(session => bubbleTaskSessionHtml(session)),
+    moreSessions ? `<button class="bubble-task-more" type="button" data-open-user-task="">另有 ${moreSessions} 个 Session</button>` : '',
+    '</div>',
+    '</section>',
   ].join('')
 }
 
@@ -2142,11 +2207,19 @@ function trimBubbles() {
 
 function renderBubbles() {
   const taskBubbles = userTaskBubbleTasks()
+  const boardSessionKeys = new Set((agentTaskBoardState.todayTasks || [])
+    .flatMap(task => task.sessions || [])
+    .map(session => session.key)
+    .filter(Boolean))
+  const looseSessions = agentLooseSessions()
+    .map(({ session }) => session)
+    .filter(session => session.ignored !== true)
   const sessionBubbles = bubbleLog.filter(item => (
     item?.event?.taskProgress?.customGroup !== true
     && item?.event?.taskProgress?.ignored !== true
+    && !boardSessionKeys.has(item?.event?.taskProgress?.sessionKey)
   ))
-  if (!taskBubbles.length && !sessionBubbles.length) {
+  if (!taskBubbles.length && !looseSessions.length && !sessionBubbles.length) {
     bubble.classList.add('hidden')
     bubble.innerHTML = ''
     activeBubbleEvent = null
@@ -2159,6 +2232,7 @@ function renderBubbles() {
     ? `<div class="bubble-stack-tools"><button type="button" data-dismiss-all-bubbles="1"${actionsCoolingDown ? ' disabled' : ''}>全部忽略</button></div>`
     : ''
   const taskCards = taskBubbles.map(userTaskBubbleHtml).join('')
+  const looseSessionCard = looseSessionBubbleHtml(looseSessions)
   const sessionCards = sessionBubbles.map((item) => {
     const target = targetForEvent(item.event)
     const targetText = target ? `<div class="bubble-target">${escapeHtml(target.label || '打开会话')}</div>` : ''
@@ -2178,7 +2252,7 @@ function renderBubbles() {
       '</article>',
     ].join('')
   }).join('')
-  bubble.innerHTML = stackTools + taskCards + sessionCards
+  bubble.innerHTML = stackTools + taskCards + looseSessionCard + sessionCards
   bubble.classList.remove('hidden')
   positionBubble()
 }

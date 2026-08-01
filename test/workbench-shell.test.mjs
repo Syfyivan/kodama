@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
-const [html, main, preload, renderer, workbenchRenderer, workbenchCss] = await Promise.all([
+const [html, main, preload, renderer, petCss, workbenchRenderer, workbenchCss] = await Promise.all([
   readFile(new URL('../src/renderer/lark-workbench.html', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/index.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/preload.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/renderer/renderer.js', import.meta.url), 'utf8'),
+  readFile(new URL('../src/renderer/style.css', import.meta.url), 'utf8'),
   readFile(new URL('../src/renderer/lark-workbench.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/renderer/lark-workbench.css', import.meta.url), 'utf8'),
 ])
@@ -51,4 +52,19 @@ test('opening the workbench releases the full-screen pet overlay mouse capture',
   assert.match(main, /larkWorkbenchWin\.setAlwaysOnTop\(true, 'screen-saver', 2\)/)
   assert.match(main, /larkWorkbenchWin\.on\('blur',[\s\S]*?setPetOverlayInteractionSuspended\(false\)/)
   assert.match(main, /larkWorkbenchWin\.on\('closed',[\s\S]*?setPetOverlayInteractionSuspended\(false\)/)
+})
+
+test('task workspace keeps every task and session inside one bounded column', () => {
+  assert.match(workbenchCss, /\.agent-task-list\s*\{[\s\S]*?overflow-x:\s*hidden;/)
+  assert.match(workbenchCss, /\.agent-task-card\s*\{[\s\S]*?max-width:\s*860px;/)
+  assert.match(workbenchCss, /\.agent-session-list\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/)
+  assert.match(workbenchCss, /\.agent-session-card\s*\{[\s\S]*?min-width:\s*0;/)
+})
+
+test('desktop task bubbles nest compact sessions under their user task', () => {
+  assert.match(renderer, /class="bubble-task-session-list"/)
+  assert.match(renderer, /class="bubble-card bubble-loose-session-group"/)
+  assert.match(renderer, /data-bubble-session-visibility=/)
+  assert.match(petCss, /\.bubble-task-session\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\) auto;/)
+  assert.match(petCss, /#bubble\s*\{[\s\S]*?width:\s*min\(292px,[\s\S]*?max-height:\s*min\(44vh,\s*280px\);/)
 })
