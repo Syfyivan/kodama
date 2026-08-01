@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
-const [html, main, preload, renderer, petCss, workbenchRenderer, workbenchCss] = await Promise.all([
+const [html, main, preload, renderer, petCss, workbenchRenderer, workbenchCss, manage] = await Promise.all([
   readFile(new URL('../src/renderer/lark-workbench.html', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/index.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/preload.js', import.meta.url), 'utf8'),
@@ -10,6 +10,7 @@ const [html, main, preload, renderer, petCss, workbenchRenderer, workbenchCss] =
   readFile(new URL('../src/renderer/style.css', import.meta.url), 'utf8'),
   readFile(new URL('../src/renderer/lark-workbench.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/renderer/lark-workbench.css', import.meta.url), 'utf8'),
+  readFile(new URL('../src/renderer/manage.js', import.meta.url), 'utf8'),
 ])
 
 test('the workbench exposes every manager as a tab in one document', () => {
@@ -67,4 +68,17 @@ test('desktop task bubbles nest compact sessions under their user task', () => {
   assert.match(renderer, /data-bubble-session-visibility=/)
   assert.match(petCss, /\.bubble-task-session\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\) auto;/)
   assert.match(petCss, /#bubble\s*\{[\s\S]*?width:\s*min\(292px,[\s\S]*?max-height:\s*min\(44vh,\s*280px\);/)
+})
+
+test('desktop task bubbles can be faded or hidden without deleting task data', () => {
+  assert.match(html, /id="taskBubbleOpacity"[^>]*type="range"[^>]*min="20"[^>]*max="100"/)
+  assert.match(html, /id="taskBubblesVisible"/)
+  assert.match(manage, /\{ id: 'taskBubbleOpacity', toModel: \(v\) => v \/ 100/)
+  assert.match(manage, /const SWITCHES = \[[^\]]*'taskBubblesVisible'/)
+  assert.match(renderer, /--task-bubble-opacity/)
+  assert.match(renderer, /uiSettings\.taskBubblesVisible\s*\?\s*userTaskBubbleTasks\(\)\s*:\s*\[\]/)
+  assert.match(renderer, /data-hide-task-bubbles/)
+  assert.match(petCss, /\.bubble-card\.bubble-user-task,[\s\S]*?opacity:\s*var\(--task-bubble-opacity/)
+  assert.match(main, /taskBubblesVisible: state\.taskBubblesVisible !== false/)
+  assert.match(main, /taskBubblesVisible \? '隐藏任务气泡' : '显示任务气泡'/)
 })

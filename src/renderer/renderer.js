@@ -21,6 +21,7 @@ import {
 } from './config/appearance.js'
 import {
   clampPetScale,
+  clampTaskBubbleOpacity,
   UI_SETTINGS_VERSION,
   uiSettingsSourceForVersion,
 } from './config/ui-settings.js'
@@ -150,6 +151,9 @@ const settingBubbleAnchor = document.getElementById('setting-bubble-anchor')
 const settingBubbleAnchorValue = document.getElementById('setting-bubble-anchor-value')
 const settingBubbleGap = document.getElementById('setting-bubble-gap')
 const settingBubbleGapValue = document.getElementById('setting-bubble-gap-value')
+const settingTaskBubbleOpacity = document.getElementById('setting-task-bubble-opacity')
+const settingTaskBubbleOpacityValue = document.getElementById('setting-task-bubble-opacity-value')
+const settingTaskBubblesVisible = document.getElementById('setting-task-bubbles-visible')
 const settingExportConfig = document.getElementById('setting-export-config')
 const settingImportConfig = document.getElementById('setting-import-config')
 const settingUpdateStatus = document.getElementById('setting-update-status')
@@ -271,6 +275,8 @@ const DEFAULT_UI_SETTINGS = {
   dndMode: false,
   soundEnabled: true,
   notificationsEnabled: true,
+  taskBubbleOpacity: 1,
+  taskBubblesVisible: true,
   bubbleCorner: 'near',
   panelCorner: 'near',
   bubbleAnchor: 58,
@@ -320,6 +326,8 @@ function normalizeUiSettings(source = {}) {
     dndMode: source.dndMode === true,
     soundEnabled: source.soundEnabled !== false,
     notificationsEnabled: source.notificationsEnabled !== false,
+    taskBubbleOpacity: clampTaskBubbleOpacity(source.taskBubbleOpacity, DEFAULT_UI_SETTINGS.taskBubbleOpacity),
+    taskBubblesVisible: source.taskBubblesVisible !== false,
     bubbleCorner: CORNERS.has(source.bubbleCorner) ? source.bubbleCorner : DEFAULT_UI_SETTINGS.bubbleCorner,
     panelCorner: CORNERS.has(source.panelCorner)
       ? source.panelCorner
@@ -360,12 +368,14 @@ function scheduleSavePetPos() {
 function applyUiSettings() {
   document.documentElement.style.setProperty('--pet-scale', String(uiSettings.petScale))
   document.documentElement.style.setProperty('--pet-opacity', String(uiSettings.petOpacity))
+  document.documentElement.style.setProperty('--task-bubble-opacity', String(uiSettings.taskBubbleOpacity))
   backend?.applySettings?.()
   syncAccessories()
   window.pet.updateUiMenuState?.({
     dndMode: uiSettings.dndMode,
     soundEnabled: uiSettings.soundEnabled,
     notificationsEnabled: uiSettings.notificationsEnabled,
+    taskBubblesVisible: uiSettings.taskBubblesVisible,
   })
   positionBubble()
   positionPanel()
@@ -387,6 +397,7 @@ function setBooleanSetting(key, value) {
   uiSettings[key] = value === true
   saveUiSettings()
   applyUiSettings()
+  if (key === 'taskBubblesVisible') renderBubbles()
 }
 
 function clampInt(value, min, max, fallback) {
@@ -511,9 +522,12 @@ async function init() {
     // Settings changed from the management window arrive as a patch.
     window.pet.onApplyUiPatch?.((patch) => {
       if (!patch || typeof patch !== 'object') return
+      const taskBubbleVisibilityChanged = patch.taskBubblesVisible !== undefined
+        && patch.taskBubblesVisible !== uiSettings.taskBubblesVisible
       uiSettings = normalizeUiSettings({ ...uiSettings, ...patch })
       saveUiSettings()
       applyUiSettings()
+      if (taskBubbleVisibilityChanged) renderBubbles()
     })
     // Multi-monitor bubble placement: fetch the per-display work areas once,
     // then keep the cache fresh from main's push (display/window changes).
@@ -1400,6 +1414,10 @@ function setupInteraction() {
       renderBubbles()
       return
     }
+    if (e.target.closest?.('[data-hide-task-bubbles]')) {
+      setBooleanSetting('taskBubblesVisible', false)
+      return
+    }
     const sessionVisibility = e.target.closest?.('[data-bubble-session-visibility]')
     if (sessionVisibility) {
       if (areBubbleActionsCoolingDown()) return
@@ -2086,7 +2104,7 @@ function userTaskBubbleTasks() {
     ))
 }
 
-function userTaskBubbleHtml(task) {
+function userTaskBubbleHtml(task, index = 0) {
   const percent = Math.min(100, Math.max(0, Math.round(Number(task.progress || 0))))
   const sessions = (Array.isArray(task.sessions) ? task.sessions : [])
     .filter(session => session.ignored !== true)
@@ -2102,7 +2120,10 @@ function userTaskBubbleHtml(task) {
     '<span aria-hidden="true"></span>',
     `<strong>${escapeHtml(task.title || '未命名任务')}</strong>`,
     '</div>',
+    '<div class="bubble-task-group-actions">',
     `<button type="button" data-open-user-task="${escapeHtml(task.id)}">编辑</button>`,
+    index === 0 ? '<button type="button" data-hide-task-bubbles="1" title="隐藏桌面任务气泡">隐藏</button>' : '',
+    '</div>',
     '</div>',
     '<div class="bubble-task-summary">',
     `<span>${escapeHtml(agentTaskStatusLabel(task.status))} · ${sessions.length} Session · ${task.openTodoCount || 0} Todo</span>`,
@@ -2206,14 +2227,16 @@ function trimBubbles() {
 }
 
 function renderBubbles() {
-  const taskBubbles = userTaskBubbleTasks()
+  const taskBubbles = uiSettings.taskBubblesVisible ? userTaskBubbleTasks() : []
   const boardSessionKeys = new Set((agentTaskBoardState.todayTasks || [])
     .flatMap(task => task.sessions || [])
     .map(session => session.key)
     .filter(Boolean))
-  const looseSessions = agentLooseSessions()
-    .map(({ session }) => session)
-    .filter(session => session.ignored !== true)
+  const looseSessions = uiSettings.taskBubblesVisible
+    ? agentLooseSessions()
+      .map(({ session }) => session)
+      .filter(session => session.ignored !== true)
+    : []
   const sessionBubbles = bubbleLog.filter(item => (
     item?.event?.taskProgress?.customGroup !== true
     && item?.event?.taskProgress?.ignored !== true
@@ -2718,6 +2741,19 @@ function setupEventPanel() {
     saveUiSettings()
     applyUiSettings()
   })
+  settingTaskBubbleOpacity?.addEventListener('input', () => {
+    uiSettings.taskBubbleOpacity = clampTaskBubbleOpacity(
+      Number(settingTaskBubbleOpacity.value) / 100,
+      DEFAULT_UI_SETTINGS.taskBubbleOpacity,
+    )
+    saveUiSettings()
+    applyUiSettings()
+  })
+  settingTaskBubblesVisible?.addEventListener('click', (e) => {
+    const button = e.target.closest?.('[data-task-bubbles-visible]')
+    if (!button) return
+    setBooleanSetting('taskBubblesVisible', button.dataset.taskBubblesVisible === 'true')
+  })
   settingExportConfig?.addEventListener('click', exportConfigToClipboard)
   settingImportConfig?.addEventListener('click', importConfigFromClipboard)
   settingCheckUpdate?.addEventListener('click', checkUpdatesFromSettings)
@@ -3208,6 +3244,13 @@ function syncSettingControls() {
   if (settingBubbleAnchorValue) settingBubbleAnchorValue.textContent = `${Math.round(uiSettings.bubbleAnchor)}%`
   if (settingBubbleGap) settingBubbleGap.value = String(Math.round(uiSettings.bubbleGap))
   if (settingBubbleGapValue) settingBubbleGapValue.textContent = `${Math.round(uiSettings.bubbleGap)}px`
+  if (settingTaskBubbleOpacity) settingTaskBubbleOpacity.value = String(Math.round(uiSettings.taskBubbleOpacity * 100))
+  if (settingTaskBubbleOpacityValue) settingTaskBubbleOpacityValue.textContent = `${Math.round(uiSettings.taskBubbleOpacity * 100)}%`
+  if (settingTaskBubblesVisible) {
+    settingTaskBubblesVisible.querySelectorAll('[data-task-bubbles-visible]').forEach((button) => {
+      button.classList.toggle('active', (button.dataset.taskBubblesVisible === 'true') === uiSettings.taskBubblesVisible)
+    })
+  }
   syncMoveModeUi()
 }
 

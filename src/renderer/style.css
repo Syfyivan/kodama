@@ -2681,6 +2681,8 @@ body.move-mode #pet-gif {
   border-radius: 14px;
   background: color-mix(in srgb, var(--kodama-surface-raised) 96%, var(--kodama-accent-soft));
   box-shadow: 0 7px 20px rgba(36, 58, 48, 0.12), inset 0 1px rgba(255, 255, 255, 0.86);
+  opacity: var(--task-bubble-opacity, 1);
+  transition: opacity 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .bubble-card.bubble-loose-session-group {
@@ -2696,6 +2698,12 @@ body.move-mode #pet-gif {
   align-items: center;
   justify-content: space-between;
   gap: 7px;
+}
+
+.bubble-task-group-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .bubble-task-title {
@@ -2739,7 +2747,7 @@ body.move-mode #pet-gif {
   white-space: nowrap;
 }
 
-.bubble-task-group-head > button,
+.bubble-task-group-actions > button,
 .bubble-loose-session-head > button,
 .bubble-task-more,
 .bubble-task-session-ignore {

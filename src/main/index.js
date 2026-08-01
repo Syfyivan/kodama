@@ -68,7 +68,12 @@ let tray
 let pomodoro = null
 let sedentaryTimer = null
 let accessoryMenuState = null
-let petUiMenuState = { dndMode: false, soundEnabled: true, notificationsEnabled: true }
+let petUiMenuState = {
+  dndMode: false,
+  soundEnabled: true,
+  notificationsEnabled: true,
+  taskBubblesVisible: true,
+}
 let localEventCount = 0
 let lastLocalEvent = null
 let lastHookReceipt = null
@@ -2808,6 +2813,7 @@ ipcMain.on('pet:ui-menu-state', (_e, state) => {
       dndMode: state.dndMode === true,
       soundEnabled: state.soundEnabled !== false,
       notificationsEnabled: state.notificationsEnabled !== false,
+      taskBubblesVisible: state.taskBubblesVisible !== false,
     }
     refreshTray()
   }
@@ -3645,6 +3651,12 @@ function refreshTray() {
   items.push({
     label: petHidden ? '显示桌宠  ⌘⌥K' : '隐藏桌宠  ⌘⌥K',
     click: () => setPetHidden(!petHidden),
+  })
+  items.push({
+    label: petUiMenuState.taskBubblesVisible ? '隐藏任务气泡' : '显示任务气泡',
+    click: () => sendToPet('pet:apply-ui-patch', {
+      taskBubblesVisible: !petUiMenuState.taskBubblesVisible,
+    }),
   })
   items.push({ label: '事件 / 配置面板  ⌘⌥P', click: () => showPetAndMaybeTogglePanel(true) })
   items.push({ label: '移动桌宠  ⌘⌥M', click: () => showPetAndEnterMoveMode() })

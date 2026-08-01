@@ -264,6 +264,18 @@
             <input id="setting-bubble-gap" type="range" min="0" max="48" step="2" />
             <output id="setting-bubble-gap-value"></output>
           </label>
+          <label>
+            <span>任务气泡透明度</span>
+            <input id="setting-task-bubble-opacity" type="range" min="20" max="100" step="5" />
+            <output id="setting-task-bubble-opacity-value"></output>
+          </label>
+          <label>
+            <span>桌面任务气泡</span>
+            <div id="setting-task-bubbles-visible" class="segmented-control">
+              <button type="button" data-task-bubbles-visible="true">显示</button>
+              <button type="button" data-task-bubbles-visible="false">隐藏</button>
+            </div>
+          </label>
           <div class="window-size-buttons" aria-label="窗口大小">
             <button type="button" data-window-size="200x290">很小</button>
             <button type="button" data-window-size="280x400">小</button>

@@ -1,6 +1,7 @@
 export const UI_SETTINGS_VERSION = 4
 export const PET_SCALE_MIN = 0.2
 export const PET_SCALE_MAX = 1.25
+export const TASK_BUBBLE_OPACITY_MIN = 0.2
 const PREVIOUS_UI_SETTINGS_VERSION = 3
 const PREVIOUS_PET_SCALE_MIN = 0.4
 
@@ -8,6 +9,12 @@ export function clampPetScale(value, fallback) {
   const n = Number(value)
   if (!Number.isFinite(n)) return fallback
   return Math.min(PET_SCALE_MAX, Math.max(PET_SCALE_MIN, n))
+}
+
+export function clampTaskBubbleOpacity(value, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(1, Math.max(TASK_BUBBLE_OPACITY_MIN, n))
 }
 
 // People who left the old slider at its floor were asking for "as small as
