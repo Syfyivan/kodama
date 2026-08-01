@@ -14,7 +14,6 @@ function patch(key, value) {
 const SLIDERS = [
   { id: 'petScale', toModel: (v) => v / 100, fmt: (v) => `${v}%` },
   { id: 'petOpacity', toModel: (v) => v / 100, fmt: (v) => `${v}%` },
-  { id: 'taskBubbleOpacity', toModel: (v) => v / 100, fmt: (v) => `${v}%` },
   { id: 'hitboxScale', toModel: (v) => v / 100, fmt: (v) => `${v}%` },
   { id: 'bubbleAnchor', toModel: (v) => v, fmt: (v) => `${v}%` },
   { id: 'bubbleGap', toModel: (v) => v, fmt: (v) => `${v}px` },
@@ -188,7 +187,6 @@ function fillUi(ui) {
   const setSlider = (id, value, out) => { const el = $(id); if (el) { el.value = String(value); const o = $(`${id}V`); if (o) o.textContent = out } }
   setSlider('petScale', pct(ui.petScale), `${pct(ui.petScale)}%`)
   setSlider('petOpacity', pct(ui.petOpacity), `${pct(ui.petOpacity)}%`)
-  setSlider('taskBubbleOpacity', pct(ui.taskBubbleOpacity), `${pct(ui.taskBubbleOpacity)}%`)
   setSlider('hitboxScale', pct(ui.hitboxScale), `${pct(ui.hitboxScale)}%`)
   setSlider('bubbleAnchor', Math.round(ui.bubbleAnchor), `${Math.round(ui.bubbleAnchor)}%`)
   setSlider('bubbleGap', Math.round(ui.bubbleGap), `${Math.round(ui.bubbleGap)}px`)

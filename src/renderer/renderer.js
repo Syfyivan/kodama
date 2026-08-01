@@ -21,10 +21,14 @@ import {
 } from './config/appearance.js'
 import {
   clampPetScale,
-  clampTaskBubbleOpacity,
   UI_SETTINGS_VERSION,
   uiSettingsSourceForVersion,
 } from './config/ui-settings.js'
+import {
+  companionDelayMs,
+  companionMomentAt,
+  isActiveCompanionMode,
+} from './companion-mode.js'
 import {
   appearanceState,
   configureAccessories,
@@ -66,6 +70,7 @@ const FALLBACK_MODEL_URL = './models/wanko/Wanko.model3.json'
 
 const canvas = document.getElementById('pet-canvas')
 const bubble = document.getElementById('bubble')
+const petDialogue = document.getElementById('pet-dialogue')
 const eventPanel = document.getElementById('event-panel')
 const panelStatus = document.getElementById('panel-status')
 const waitingEvents = document.getElementById('waiting-events')
@@ -151,8 +156,6 @@ const settingBubbleAnchor = document.getElementById('setting-bubble-anchor')
 const settingBubbleAnchorValue = document.getElementById('setting-bubble-anchor-value')
 const settingBubbleGap = document.getElementById('setting-bubble-gap')
 const settingBubbleGapValue = document.getElementById('setting-bubble-gap-value')
-const settingTaskBubbleOpacity = document.getElementById('setting-task-bubble-opacity')
-const settingTaskBubbleOpacityValue = document.getElementById('setting-task-bubble-opacity-value')
 const settingTaskBubblesVisible = document.getElementById('setting-task-bubbles-visible')
 const settingExportConfig = document.getElementById('setting-export-config')
 const settingImportConfig = document.getElementById('setting-import-config')
@@ -205,6 +208,8 @@ const BUBBLE_WIDTH = 292
 const PANEL_WIDTH = 340
 const BUBBLE_MAX_HEIGHT = 280
 const PANEL_MAX_HEIGHT = 440
+const PET_DIALOGUE_WIDTH = 172
+const PET_DIALOGUE_MAX_HEIGHT = 72
 const BUBBLE_TASK_SESSION_LIMIT = 3
 const BUBBLE_LOOSE_SESSION_LIMIT = 4
 let bridgeTasksSharePending = false
@@ -275,7 +280,6 @@ const DEFAULT_UI_SETTINGS = {
   dndMode: false,
   soundEnabled: true,
   notificationsEnabled: true,
-  taskBubbleOpacity: 1,
   taskBubblesVisible: true,
   bubbleCorner: 'near',
   panelCorner: 'near',
@@ -295,6 +299,10 @@ let pomodoroSettings = {
 }
 let activeHoverBubbleId = ''
 let wanderTimer = null
+let companionTimer = null
+let petDialogueTimer = null
+let companionModeActive = null
+let companionMomentIndex = 0
 let floatingLayoutFrame = 0
 let moveModeUntil = 0
 let moveModeTimer = 0
@@ -326,7 +334,6 @@ function normalizeUiSettings(source = {}) {
     dndMode: source.dndMode === true,
     soundEnabled: source.soundEnabled !== false,
     notificationsEnabled: source.notificationsEnabled !== false,
-    taskBubbleOpacity: clampTaskBubbleOpacity(source.taskBubbleOpacity, DEFAULT_UI_SETTINGS.taskBubbleOpacity),
     taskBubblesVisible: source.taskBubblesVisible !== false,
     bubbleCorner: CORNERS.has(source.bubbleCorner) ? source.bubbleCorner : DEFAULT_UI_SETTINGS.bubbleCorner,
     panelCorner: CORNERS.has(source.panelCorner)
@@ -368,7 +375,6 @@ function scheduleSavePetPos() {
 function applyUiSettings() {
   document.documentElement.style.setProperty('--pet-scale', String(uiSettings.petScale))
   document.documentElement.style.setProperty('--pet-opacity', String(uiSettings.petOpacity))
-  document.documentElement.style.setProperty('--task-bubble-opacity', String(uiSettings.taskBubbleOpacity))
   backend?.applySettings?.()
   syncAccessories()
   window.pet.updateUiMenuState?.({
@@ -380,6 +386,7 @@ function applyUiSettings() {
   positionBubble()
   positionPanel()
   configureWander()
+  configureCompanionMode()
   syncSettingControls()
   window.pet.reportUiSettings?.(uiSettings) // keep the management window in sync
 }
@@ -1399,6 +1406,7 @@ function setupInteraction() {
 
   bubble.addEventListener('click', (e) => {
     e.stopPropagation()
+    if (e.target.closest?.('[data-agent-session-drag-handle]')) return
     if (e.target.closest?.('[data-dismiss-all-bubbles]')) {
       if (areBubbleActionsCoolingDown()) return
       debounceBubbleActions()
@@ -1483,8 +1491,16 @@ function setupInteraction() {
     const card = e.target.closest?.('[data-agent-session-drag]')
     if (!card) return
     draggedAgentSessionKey = card.dataset.agentSessionDrag || ''
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', draggedAgentSessionKey)
+    if (!draggedAgentSessionKey) {
+      e.preventDefault()
+      return
+    }
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', draggedAgentSessionKey)
+    }
+    card.setAttribute('aria-grabbed', 'true')
+    bubble.classList.add('is-session-dragging')
     requestAnimationFrame(() => card.classList.add('dragging'))
   })
 
@@ -1492,7 +1508,7 @@ function setupInteraction() {
     const task = e.target.closest?.('[data-agent-task-drop]')
     if (!task || !draggedAgentSessionKey) return
     e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
     bubble.querySelectorAll('.drop-active').forEach(item => item.classList.remove('drop-active'))
     task.classList.add('drop-active')
   })
@@ -1504,25 +1520,21 @@ function setupInteraction() {
 
   bubble.addEventListener('drop', async (e) => {
     const task = e.target.closest?.('[data-agent-task-drop]')
-    const sessionKey = e.dataTransfer.getData('text/plain') || draggedAgentSessionKey
-    bubble.querySelectorAll('.drop-active').forEach(item => item.classList.remove('drop-active'))
+    const sessionKey = e.dataTransfer?.getData('text/plain') || draggedAgentSessionKey
+    const taskId = task?.dataset.agentTaskDrop || ''
+    clearAgentSessionDragUi()
     if (!task || !sessionKey) return
     e.preventDefault()
     await runAgentTaskMutation(
       () => window.pet.assignAgentSession?.({
         sessionKey,
-        taskId: task.dataset.agentTaskDrop,
+        taskId,
       }),
       'Session 已归入任务',
     )
   })
 
-  bubble.addEventListener('dragend', () => {
-    draggedAgentSessionKey = ''
-    bubble.querySelectorAll('.dragging, .drop-active').forEach(item => {
-      item.classList.remove('dragging', 'drop-active')
-    })
-  })
+  bubble.addEventListener('dragend', clearAgentSessionDragUi)
 
   bubble.addEventListener('mousemove', (e) => {
     const card = e.target.closest?.('[data-bubble-id]')
@@ -1554,6 +1566,15 @@ function onTap() {
   say(`🐾 ${statusText()} · 今日 ${fmtTokens(tokenStats.today)} tok${larkPart}`, 3000)
 }
 
+function clearAgentSessionDragUi() {
+  draggedAgentSessionKey = ''
+  bubble.classList.remove('is-session-dragging')
+  bubble.querySelectorAll('.dragging, .drop-active').forEach(item => {
+    item.classList.remove('dragging', 'drop-active')
+    item.removeAttribute('aria-grabbed')
+  })
+}
+
 function configureWander() {
   if (wanderTimer) {
     clearInterval(wanderTimer)
@@ -1570,6 +1591,84 @@ function configureWander() {
     scheduleFloatingLayout()
     backend?.playMotion?.('Idle')
   }, 18000)
+}
+
+function hidePetDialogue() {
+  if (petDialogueTimer) {
+    clearTimeout(petDialogueTimer)
+    petDialogueTimer = null
+  }
+  if (!petDialogue) return
+  petDialogue.classList.add('hidden')
+  petDialogue.textContent = ''
+}
+
+function positionPetDialogue() {
+  if (!petDialogue || petDialogue.classList.contains('hidden')) return
+  positionNearPet(petDialogue, PET_DIALOGUE_WIDTH, 46, PET_DIALOGUE_MAX_HEIGHT)
+  const pet = petBounds()
+  const dialogue = petDialogue.getBoundingClientRect()
+  if (!pet || !dialogue.width || !dialogue.height) return
+  const petCenterX = pet.x + pet.width / 2
+  const petCenterY = pet.y + pet.height / 2
+  petDialogue.dataset.petSide = dialogue.top + dialogue.height / 2 < petCenterY ? 'above' : 'below'
+  petDialogue.dataset.petHorizontal = dialogue.left + dialogue.width / 2 < petCenterX ? 'left' : 'right'
+}
+
+function showPetDialogue(text, ms = 4400) {
+  if (!petDialogue || !companionModeActive || uiSettings.dndMode) return
+  if (petDialogueTimer) clearTimeout(petDialogueTimer)
+  petDialogue.textContent = String(text || '')
+  petDialogue.classList.remove('hidden')
+  positionPetDialogue()
+  petDialogueTimer = setTimeout(() => {
+    petDialogueTimer = null
+    petDialogue.classList.add('hidden')
+    petDialogue.textContent = ''
+  }, ms)
+}
+
+function scheduleCompanionMoment(delay = companionDelayMs()) {
+  if (companionTimer) clearTimeout(companionTimer)
+  if (!companionModeActive) {
+    companionTimer = null
+    return
+  }
+  companionTimer = setTimeout(playCompanionMoment, delay)
+}
+
+function playCompanionMoment() {
+  companionTimer = null
+  if (!companionModeActive) return
+  if (document.hidden || panelVisible || !bubble.classList.contains('hidden')) {
+    scheduleCompanionMoment(8000)
+    return
+  }
+  const moment = companionMomentAt(companionMomentIndex)
+  companionMomentIndex += 1
+  backend?.playMotion?.(moment.motion, 'normal')
+  showPetDialogue(moment.text)
+  scheduleCompanionMoment()
+}
+
+function configureCompanionMode() {
+  const nextActive = isActiveCompanionMode(uiSettings)
+  const changed = nextActive !== companionModeActive
+  companionModeActive = nextActive
+  document.body.dataset.companionActive = String(nextActive)
+  if (!nextActive) {
+    if (companionTimer) clearTimeout(companionTimer)
+    companionTimer = null
+    hidePetDialogue()
+    return
+  }
+  if (!changed && companionTimer) {
+    positionPetDialogue()
+    return
+  }
+  if (companionTimer) clearTimeout(companionTimer)
+  hidePetDialogue()
+  scheduleCompanionMoment(changed ? 650 : companionDelayMs())
 }
 
 let tokenStats = { today: 0, last7: 0, total: 0, local: {}, lark: {} }
@@ -1962,9 +2061,10 @@ function positionNearPet(el, fallbackWidth, fallbackHeight, heightCap = Number.P
 function positionBubble() {
   if (uiSettings.bubbleCorner !== 'near') {
     setElementCorner(bubble, uiSettings.bubbleCorner, BUBBLE_WIDTH, 54, BUBBLE_MAX_HEIGHT)
-    return
+  } else {
+    positionNearPet(bubble, BUBBLE_WIDTH, 80, BUBBLE_MAX_HEIGHT)
   }
-  positionNearPet(bubble, BUBBLE_WIDTH, 80, BUBBLE_MAX_HEIGHT)
+  positionPetDialogue()
 }
 
 function positionPanel() {
@@ -2141,14 +2241,15 @@ function userTaskBubbleHtml(task, index = 0) {
   ].join('')
 }
 
-function bubbleTaskSessionHtml(session) {
+function bubbleTaskSessionHtml(session, { loose = false } = {}) {
   const sessionKey = String(session?.key || '')
   const source = agentSessionSourceLabel(session)
   const title = shortText(session?.title || session?.agent || 'Session', 32)
   const current = shortText(session?.currentStep || (session?.status === 'done' ? '已完成' : '准备执行'), 44)
   const status = agentTaskStatusLabel(session?.status)
   return [
-    `<article class="bubble-task-session" data-status="${escapeHtml(session?.status || '')}"${sessionKey ? ` draggable="true" data-agent-session-drag="${escapeHtml(sessionKey)}"` : ''}>`,
+    `<article class="bubble-task-session" data-status="${escapeHtml(session?.status || '')}" data-loose="${loose}"${sessionKey ? ` draggable="true" data-agent-session-drag="${escapeHtml(sessionKey)}" aria-grabbed="false"` : ''}>`,
+    `<span class="bubble-task-session-drag-handle" data-agent-session-drag-handle="1" title="按住拖到任意任务中" aria-hidden="true">⠿</span>`,
     `<button class="bubble-task-session-main" type="button" data-bubble-session-open="${escapeHtml(sessionKey)}"${session?.target ? '' : ' disabled'} title="${escapeHtml(session?.currentStep || title)}">`,
     `<strong>${escapeHtml(source)} · ${escapeHtml(title)}</strong>`,
     `<span>${escapeHtml(status)}${current ? ` · ${escapeHtml(current)}` : ''}</span>`,
@@ -2169,7 +2270,7 @@ function looseSessionBubbleHtml(sessions) {
     '<button type="button" data-open-user-task="">整理</button>',
     '</div>',
     '<div class="bubble-task-session-list">',
-    ...visibleSessions.map(session => bubbleTaskSessionHtml(session)),
+    ...visibleSessions.map(session => bubbleTaskSessionHtml(session, { loose: true })),
     moreSessions ? `<button class="bubble-task-more" type="button" data-open-user-task="">另有 ${moreSessions} 个 Session</button>` : '',
     '</div>',
     '</section>',
@@ -2249,6 +2350,7 @@ function renderBubbles() {
     hideBubbleHover()
     return
   }
+  if (companionModeActive) hidePetDialogue()
   activeBubbleEvent = sessionBubbles[0]?.event || null
   const actionsCoolingDown = areBubbleActionsCoolingDown()
   const stackTools = sessionBubbles.length > 1
@@ -2738,14 +2840,6 @@ function setupEventPanel() {
   })
   settingBubbleGap?.addEventListener('input', () => {
     uiSettings.bubbleGap = clampNumber(settingBubbleGap.value, 0, 48, DEFAULT_UI_SETTINGS.bubbleGap)
-    saveUiSettings()
-    applyUiSettings()
-  })
-  settingTaskBubbleOpacity?.addEventListener('input', () => {
-    uiSettings.taskBubbleOpacity = clampTaskBubbleOpacity(
-      Number(settingTaskBubbleOpacity.value) / 100,
-      DEFAULT_UI_SETTINGS.taskBubbleOpacity,
-    )
     saveUiSettings()
     applyUiSettings()
   })
@@ -3244,8 +3338,6 @@ function syncSettingControls() {
   if (settingBubbleAnchorValue) settingBubbleAnchorValue.textContent = `${Math.round(uiSettings.bubbleAnchor)}%`
   if (settingBubbleGap) settingBubbleGap.value = String(Math.round(uiSettings.bubbleGap))
   if (settingBubbleGapValue) settingBubbleGapValue.textContent = `${Math.round(uiSettings.bubbleGap)}px`
-  if (settingTaskBubbleOpacity) settingTaskBubbleOpacity.value = String(Math.round(uiSettings.taskBubbleOpacity * 100))
-  if (settingTaskBubbleOpacityValue) settingTaskBubbleOpacityValue.textContent = `${Math.round(uiSettings.taskBubbleOpacity * 100)}%`
   if (settingTaskBubblesVisible) {
     settingTaskBubblesVisible.querySelectorAll('[data-task-bubbles-visible]').forEach((button) => {
       button.classList.toggle('active', (button.dataset.taskBubblesVisible === 'true') === uiSettings.taskBubblesVisible)

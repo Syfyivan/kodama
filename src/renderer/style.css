@@ -137,6 +137,10 @@ body[data-pet-skin="peach"] {
   animation: kodama-tap 720ms cubic-bezier(.2, .8, .2, 1) 1 both;
 }
 
+body[data-companion-active="true"] #pet-gif[data-state="idle"] {
+  animation-duration: 3.2s;
+}
+
 body.move-mode #pet-gif {
   animation-play-state: paused;
 }
@@ -383,6 +387,7 @@ body.move-mode #pet-gif {
   width: min(340px, calc(100vw - 20px));
   color: #243142;
   font: 12px/1.35 -apple-system, "PingFang SC", system-ui, sans-serif;
+  opacity: var(--pet-opacity);
   pointer-events: auto;
   transition: opacity 0.25s ease;
   max-height: min(56vh, 420px);
@@ -402,6 +407,60 @@ body.move-mode #pet-gif {
 }
 
 #bubble.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#pet-dialogue {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  box-sizing: border-box;
+  width: min(172px, calc(100vw - 20px));
+  max-height: 72px;
+  padding: 8px 10px;
+  overflow: visible;
+  color: var(--kodama-ink);
+  border: 1px solid var(--kodama-border-strong);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--kodama-surface-raised) 95%, var(--kodama-accent-soft));
+  box-shadow: 0 8px 24px rgba(36, 58, 48, 0.14), inset 0 1px rgba(255, 255, 255, 0.82);
+  opacity: var(--pet-opacity);
+  font: 10px/1.4 var(--kodama-font);
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  z-index: 11;
+}
+
+#pet-dialogue::after {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-right: 1px solid var(--kodama-border-strong);
+  border-bottom: 1px solid var(--kodama-border-strong);
+  background: var(--kodama-surface-raised);
+  content: "";
+  transform: rotate(45deg);
+}
+
+#pet-dialogue[data-pet-side="above"]::after {
+  bottom: -5px;
+}
+
+#pet-dialogue[data-pet-side="below"]::after {
+  top: -5px;
+  transform: rotate(225deg);
+}
+
+#pet-dialogue[data-pet-horizontal="left"]::after {
+  right: 18px;
+}
+
+#pet-dialogue[data-pet-horizontal="right"]::after {
+  left: 18px;
+}
+
+#pet-dialogue.hidden {
   opacity: 0;
   pointer-events: none;
 }
@@ -2675,14 +2734,14 @@ body.move-mode #pet-gif {
    its progress; nested Session rows only show status and current activity. */
 .bubble-card.bubble-user-task,
 .bubble-card.bubble-loose-session-group {
+  position: relative;
   min-width: 0;
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--kodama-accent) 24%, var(--kodama-border));
   border-radius: 14px;
   background: color-mix(in srgb, var(--kodama-surface-raised) 96%, var(--kodama-accent-soft));
   box-shadow: 0 7px 20px rgba(36, 58, 48, 0.12), inset 0 1px rgba(255, 255, 255, 0.86);
-  opacity: var(--task-bubble-opacity, 1);
-  transition: opacity 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
 .bubble-card.bubble-loose-session-group {
@@ -2793,7 +2852,7 @@ body.move-mode #pet-gif {
 .bubble-task-session {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
   padding: 5px 6px;
@@ -2803,8 +2862,53 @@ body.move-mode #pet-gif {
   cursor: grab;
 }
 
+.bubble-task-session:active {
+  cursor: grabbing;
+}
+
+.bubble-task-session-drag-handle {
+  display: grid;
+  width: 12px;
+  min-height: 24px;
+  place-items: center;
+  color: color-mix(in srgb, var(--kodama-accent-deep) 76%, var(--kodama-ink-muted));
+  font-size: 11px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+}
+
+.bubble-task-session[data-loose="true"] .bubble-task-session-drag-handle {
+  color: var(--kodama-accent-deep);
+}
+
 .bubble-task-session.dragging {
   opacity: 0.45;
+}
+
+#bubble.is-session-dragging .bubble-user-task {
+  border-color: color-mix(in srgb, var(--kodama-accent) 68%, var(--kodama-border));
+  border-style: dashed;
+}
+
+#bubble.is-session-dragging .bubble-user-task.drop-active {
+  border-style: solid;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--kodama-accent) 22%, transparent), 0 9px 24px rgba(36, 58, 48, 0.15);
+}
+
+#bubble.is-session-dragging .bubble-user-task.drop-active::after {
+  position: absolute;
+  inset: 4px;
+  display: grid;
+  place-items: center;
+  color: var(--kodama-accent-deep);
+  border: 1px dashed color-mix(in srgb, var(--kodama-accent) 74%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--kodama-surface-raised) 86%, transparent);
+  content: "松手归入此任务";
+  font: 700 9px/1 var(--kodama-font);
+  pointer-events: none;
+  z-index: 3;
 }
 
 .bubble-task-session-main {

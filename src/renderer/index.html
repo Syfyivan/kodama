@@ -25,6 +25,7 @@
   <body>
     <canvas id="pet-canvas"></canvas>
     <div id="bubble" class="hidden"></div>
+    <div id="pet-dialogue" class="hidden" role="status" aria-live="polite"></div>
     <section id="event-panel" class="hidden">
       <header class="panel-header">
         <strong><span class="drag-handle" title="拖动移动桌宠">⠿</span> 今日任务 / Agent</strong>
@@ -143,7 +144,7 @@
             <output id="setting-pet-scale-value"></output>
           </label>
           <label>
-            <span>透明度</span>
+            <span>小人与气泡透明度</span>
             <input id="setting-pet-opacity" type="range" min="25" max="100" step="5" />
             <output id="setting-pet-opacity-value"></output>
           </label>
@@ -263,11 +264,6 @@
             <span>气泡间距</span>
             <input id="setting-bubble-gap" type="range" min="0" max="48" step="2" />
             <output id="setting-bubble-gap-value"></output>
-          </label>
-          <label>
-            <span>任务气泡透明度</span>
-            <input id="setting-task-bubble-opacity" type="range" min="20" max="100" step="5" />
-            <output id="setting-task-bubble-opacity-value"></output>
           </label>
           <label>
             <span>桌面任务气泡</span>

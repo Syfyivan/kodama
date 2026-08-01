@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 
-const [html, main, preload, renderer, petCss, workbenchRenderer, workbenchCss, manage] = await Promise.all([
+const [html, petHtml, main, preload, renderer, petCss, workbenchRenderer, workbenchCss, manage] = await Promise.all([
   readFile(new URL('../src/renderer/lark-workbench.html', import.meta.url), 'utf8'),
+  readFile(new URL('../src/renderer/index.html', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/index.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/main/preload.js', import.meta.url), 'utf8'),
   readFile(new URL('../src/renderer/renderer.js', import.meta.url), 'utf8'),
@@ -66,19 +67,33 @@ test('desktop task bubbles nest compact sessions under their user task', () => {
   assert.match(renderer, /class="bubble-task-session-list"/)
   assert.match(renderer, /class="bubble-card bubble-loose-session-group"/)
   assert.match(renderer, /data-bubble-session-visibility=/)
-  assert.match(petCss, /\.bubble-task-session\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\) auto;/)
+  assert.match(renderer, /data-agent-session-drag-handle=/)
+  assert.match(renderer, /window\.pet\.assignAgentSession[\s\S]*?sessionKey,[\s\S]*?taskId,/)
+  assert.match(renderer, /clearAgentSessionDragUi\(\)/)
+  assert.match(petCss, /\.bubble-task-session\s*\{[\s\S]*?grid-template-columns:\s*auto minmax\(0,\s*1fr\) auto;/)
+  assert.match(petCss, /#bubble\.is-session-dragging \.bubble-user-task\.drop-active/)
   assert.match(petCss, /#bubble\s*\{[\s\S]*?width:\s*min\(292px,[\s\S]*?max-height:\s*min\(44vh,\s*280px\);/)
 })
 
-test('desktop task bubbles can be faded or hidden without deleting task data', () => {
-  assert.match(html, /id="taskBubbleOpacity"[^>]*type="range"[^>]*min="20"[^>]*max="100"/)
+test('desktop task bubbles follow pet opacity and can be hidden without deleting task data', () => {
+  assert.match(html, /小人与气泡透明度/)
+  assert.doesNotMatch(html, /id="taskBubbleOpacity"/)
   assert.match(html, /id="taskBubblesVisible"/)
-  assert.match(manage, /\{ id: 'taskBubbleOpacity', toModel: \(v\) => v \/ 100/)
+  assert.doesNotMatch(manage, /id: 'taskBubbleOpacity'/)
   assert.match(manage, /const SWITCHES = \[[^\]]*'taskBubblesVisible'/)
-  assert.match(renderer, /--task-bubble-opacity/)
+  assert.doesNotMatch(renderer, /--task-bubble-opacity/)
   assert.match(renderer, /uiSettings\.taskBubblesVisible\s*\?\s*userTaskBubbleTasks\(\)\s*:\s*\[\]/)
   assert.match(renderer, /data-hide-task-bubbles/)
-  assert.match(petCss, /\.bubble-card\.bubble-user-task,[\s\S]*?opacity:\s*var\(--task-bubble-opacity/)
+  assert.match(petCss, /#bubble\s*\{[\s\S]*?opacity:\s*var\(--pet-opacity\)/)
   assert.match(main, /taskBubblesVisible: state\.taskBubblesVisible !== false/)
   assert.match(main, /taskBubblesVisible \? '隐藏任务气泡' : '显示任务气泡'/)
+})
+
+test('hidden task bubbles switch the pet into an independent dialogue and motion mode', () => {
+  assert.match(petHtml, /id="pet-dialogue"[^>]*aria-live="polite"/)
+  assert.match(renderer, /isActiveCompanionMode\(uiSettings\)/)
+  assert.match(renderer, /backend\?\.playMotion\?\.\(moment\.motion, 'normal'\)/)
+  assert.match(renderer, /showPetDialogue\(moment\.text\)/)
+  assert.match(petCss, /#pet-dialogue\s*\{[\s\S]*?opacity:\s*var\(--pet-opacity\)/)
+  assert.match(petCss, /body\[data-companion-active="true"\] #pet-gif\[data-state="idle"\]/)
 })

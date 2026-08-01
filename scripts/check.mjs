@@ -47,6 +47,7 @@ const CJS = [
 const ESM = [
   'src/renderer/renderer.js',
   'src/renderer/appearance-confirm.js',
+  'src/renderer/companion-mode.js',
   'src/renderer/bridge-tasks.js',
   'src/renderer/lark-workbench.js',
   'src/renderer/agent-sync.js',
