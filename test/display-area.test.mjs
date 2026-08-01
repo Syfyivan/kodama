@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { pickDisplayArea, areasToWindowRects } from '../src/renderer/display-area.js'
+import {
+  areasToWindowRects,
+  clampFloatingHeight,
+  pickDisplayArea,
+} from '../src/renderer/display-area.js'
 
 // Two side-by-side 1920x1080 monitors in window coords (primary at origin).
 const TWO_DISPLAYS = [
@@ -104,4 +108,15 @@ test('returns no rects for a missing origin or empty viewport', () => {
   const areas = [{ x: 0, y: 0, width: 800, height: 600 }]
   assert.deepEqual(areasToWindowRects(areas, null, { width: 800, height: 600 }, { width: 800, height: 600 }), [])
   assert.deepEqual(areasToWindowRects(areas, { x: 0, y: 0 }, { width: 800, height: 600 }, { width: 0, height: 600 }), [])
+})
+
+test('positions a long floating stack using its capped visible height', () => {
+  // A long bubble may contain many cards (1400px of scrollable content), but
+  // only the rendered 300px surface participates in placement beside the pet.
+  assert.equal(clampFloatingHeight(1400, 869, 300), 300)
+})
+
+test('keeps the display work area as the fallback floating-height limit', () => {
+  assert.equal(clampFloatingHeight(1400, 240), 240)
+  assert.equal(clampFloatingHeight(180, 869, 300), 180)
 })

@@ -31,6 +31,17 @@ function containsPoint(area, point) {
     && point.y >= area.top && point.y <= area.bottom
 }
 
+// Floating surfaces can contain far more scrollable content than they render.
+// Placement must use the final visible height, otherwise a long bubble is
+// positioned as if all of its cards were expanded and appears detached from
+// the pet after CSS clips it.
+export function clampFloatingHeight(contentHeight, availableHeight, maxHeight = Number.POSITIVE_INFINITY) {
+  const content = Number.isFinite(contentHeight) ? Math.max(0, contentHeight) : 0
+  const available = Number.isFinite(availableHeight) ? Math.max(0, availableHeight) : 0
+  const cap = Number.isFinite(maxHeight) ? Math.max(0, maxHeight) : Number.POSITIVE_INFINITY
+  return Math.min(content, available, cap)
+}
+
 // Pick the display work area for a point (the pet's anchor): the area that
 // contains it, else the nearest one (the pet can hang between monitors), else
 // the fallback when no usable area data exists yet.

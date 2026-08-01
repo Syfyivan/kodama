@@ -6,7 +6,11 @@ import { initAccessoryLayer } from './accessories.js'
 import { welcomeCopyForGrowth } from './onboarding.js'
 import { tokenTotalWhenReady } from './token-feed.js'
 import { scaledHitboxSize } from './pet-hitbox.js'
-import { pickDisplayArea, areasToWindowRects } from './display-area.js'
+import {
+  areasToWindowRects,
+  clampFloatingHeight,
+  pickDisplayArea,
+} from './display-area.js'
 import { anchoredConfirmRect } from './appearance-confirm.js'
 import { ACCESSORIES, ACCESSORY_SLOTS } from './config/accessories.js'
 import {
@@ -1634,7 +1638,14 @@ function clampElementToVisibleArea(left, top, width, height, padding = FLOATING_
   }
 }
 
-function prepareFloatingElement(el, preferredWidth, fallbackHeight, padding = FLOATING_PADDING, area = viewportVisibleArea()) {
+function prepareFloatingElement(
+  el,
+  preferredWidth,
+  fallbackHeight,
+  padding = FLOATING_PADDING,
+  area = viewportVisibleArea(),
+  heightCap = Number.POSITIVE_INFINITY,
+) {
   const availableWidth = Math.max(44, Math.floor(area.right - area.left - padding * 2))
   const availableHeight = Math.max(44, Math.floor(area.bottom - area.top - padding * 2))
   const width = Math.min(preferredWidth, availableWidth)
@@ -1643,22 +1654,17 @@ function prepareFloatingElement(el, preferredWidth, fallbackHeight, padding = FL
     el.style.maxWidth = `${availableWidth}px`
   }
   const rect = visibleRectFor(el, width, fallbackHeight)
-  const naturalHeight = rect.height
-  const height = Math.min(naturalHeight, availableHeight)
-  setElementMaxHeight(el, availableHeight)
-  return { area, padding, width, height, naturalHeight, availableHeight }
+  const contentHeight = rect.height
+  const maxHeight = clampFloatingHeight(availableHeight, availableHeight, heightCap)
+  const height = clampFloatingHeight(contentHeight, availableHeight, heightCap)
+  setElementMaxHeight(el, maxHeight)
+  return { area, padding, width, height, contentHeight, maxHeight }
 }
 
 function setElementMaxHeight(el, maxHeight) {
   if (!el) return
   const height = Math.max(44, Math.floor(maxHeight))
   el.style.maxHeight = `${height}px`
-}
-
-function capElementMaxHeight(el, cap) {
-  if (!el) return
-  const current = Number.parseFloat(el.style.maxHeight)
-  setElementMaxHeight(el, Number.isFinite(current) ? Math.min(current, cap) : cap)
 }
 
 function rectIntersection(a, b) {
@@ -1741,16 +1747,17 @@ function chooseCorner(width, height) {
     .sort((a, b) => b.distance - a.distance)[0]
 }
 
-function setElementCorner(el, corner, fallbackWidth, fallbackHeight) {
+function setElementCorner(el, corner, fallbackWidth, fallbackHeight, heightCap = Number.POSITIVE_INFINITY) {
   if (!el) return
   if (corner === 'near') {
-    positionNearPet(el, fallbackWidth, fallbackHeight)
+    positionNearPet(el, fallbackWidth, fallbackHeight, heightCap)
     return
   }
-  const { width, height, area, padding } = prepareFloatingElement(el, fallbackWidth, fallbackHeight, 10)
+  const { width, height, area, padding, maxHeight } = prepareFloatingElement(
+    el, fallbackWidth, fallbackHeight, 10, viewportVisibleArea(), heightCap,
+  )
   const chosen = corner === 'auto' ? chooseCorner(width, height).id : corner
-  const maxHeight = Math.max(44, area.bottom - area.top - padding * 2)
-  const displayHeight = Math.min(height, maxHeight)
+  const displayHeight = height
   const top = chosen.includes('top') ? area.top + padding : area.bottom - displayHeight - padding
   const left = chosen.includes('left') ? area.left + padding : area.right - width - padding
   const next = clampElementToVisibleArea(left, top, width, displayHeight, padding)
@@ -1760,10 +1767,10 @@ function setElementCorner(el, corner, fallbackWidth, fallbackHeight) {
   el.style.top = `${next.top}px`
 }
 
-function positionNearPet(el, fallbackWidth, fallbackHeight) {
+function positionNearPet(el, fallbackWidth, fallbackHeight, heightCap = Number.POSITIVE_INFINITY) {
   const pet = petBounds()
   if (!pet) {
-    setElementCorner(el, 'top-right', fallbackWidth, fallbackHeight)
+    setElementCorner(el, 'top-right', fallbackWidth, fallbackHeight, heightCap)
     return
   }
   // The overlay spans every display, but viewportVisibleArea() describes just
@@ -1775,8 +1782,13 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
     y: pet.y + pet.height * (uiSettings.bubbleAnchor / 100),
   }
   const petDisplayArea = displayAreaForPoint(petAnchor)
-  const { width, height, naturalHeight, area, padding } = prepareFloatingElement(
-    el, fallbackWidth, fallbackHeight, FLOATING_PADDING, petDisplayArea || viewportVisibleArea(),
+  const { width, height, maxHeight, area, padding } = prepareFloatingElement(
+    el,
+    fallbackWidth,
+    fallbackHeight,
+    FLOATING_PADDING,
+    petDisplayArea || viewportVisibleArea(),
+    heightCap,
   )
   // Live2D bounds carry a lot of transparent padding, so snuggling against the
   // raw bounds leaves a big visible gap. Anchor the bubble to a centered visible
@@ -1820,7 +1832,7 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
         right: maxRight,
         bottom: Math.max(minTop, visiblePet.top - gap),
         preferredLeft: anchorX - width / 2,
-        preferredTop: visiblePet.top - gap - Math.min(naturalHeight, Math.max(44, visiblePet.top - gap - minTop)),
+        preferredTop: visiblePet.top - gap - Math.min(height, Math.max(44, visiblePet.top - gap - minTop)),
       },
       {
         id: 'below',
@@ -1862,7 +1874,7 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
     })).filter(zone => zone.zoneWidth >= width && zone.zoneHeight >= 44)
 
     const chosen = zones.map((zone) => {
-      const displayHeight = Math.min(naturalHeight, zone.zoneHeight)
+      const displayHeight = Math.min(height, zone.zoneHeight)
       const left = clampPoint(zone.preferredLeft, zone.left, Math.max(zone.left, zone.right - width))
       const top = clampPoint(zone.preferredTop, zone.top, Math.max(zone.top, zone.bottom - displayHeight))
       const edgeBonus =
@@ -1870,19 +1882,19 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
         (petOffLeft && zone.side === 'right' ? 5000 : 0) +
         (petOffBottom && zone.vertical === 'top' ? 2200 : 0) +
         (petOffTop && zone.vertical === 'bottom' ? 2200 : 0)
-      const fitsNaturalHeight = zone.zoneHeight >= naturalHeight ? 100000 : 0
+      const fitsVisibleHeight = zone.zoneHeight >= height ? 100000 : 0
       const centerDistance = (left + width / 2 - anchorX) ** 2 + (top + displayHeight / 2 - anchorY) ** 2
       return {
         ...zone,
         left,
         top,
         displayHeight,
-        score: fitsNaturalHeight + edgeBonus + displayHeight * 12 + zone.zoneWidth - centerDistance * 0.01,
+        score: fitsVisibleHeight + edgeBonus + displayHeight * 12 + zone.zoneWidth - centerDistance * 0.01,
       }
     }).sort((a, b) => b.score - a.score)[0]
 
     if (chosen) {
-      setElementMaxHeight(el, chosen.zoneHeight)
+      setElementMaxHeight(el, Math.min(maxHeight, chosen.zoneHeight))
       el.style.transform = 'none'
       el.style.left = `${chosen.left}px`
       el.style.top = `${chosen.top}px`
@@ -1911,21 +1923,16 @@ function positionNearPet(el, fallbackWidth, fallbackHeight) {
 }
 
 function positionBubble() {
-  setElementMaxHeight(bubble, BUBBLE_MAX_HEIGHT)
   if (uiSettings.bubbleCorner !== 'near') {
-    setElementCorner(bubble, uiSettings.bubbleCorner, BUBBLE_WIDTH, 54)
-    capElementMaxHeight(bubble, BUBBLE_MAX_HEIGHT)
+    setElementCorner(bubble, uiSettings.bubbleCorner, BUBBLE_WIDTH, 54, BUBBLE_MAX_HEIGHT)
     return
   }
-  positionNearPet(bubble, BUBBLE_WIDTH, 80)
-  capElementMaxHeight(bubble, BUBBLE_MAX_HEIGHT)
+  positionNearPet(bubble, BUBBLE_WIDTH, 80, BUBBLE_MAX_HEIGHT)
 }
 
 function positionPanel() {
   if (!eventPanel || eventPanel.classList.contains('hidden')) return
-  setElementMaxHeight(eventPanel, PANEL_MAX_HEIGHT)
-  setElementCorner(eventPanel, uiSettings.panelCorner, PANEL_WIDTH, 260)
-  capElementMaxHeight(eventPanel, PANEL_MAX_HEIGHT)
+  setElementCorner(eventPanel, uiSettings.panelCorner, PANEL_WIDTH, 260, PANEL_MAX_HEIGHT)
   positionAppearanceConfirm()
 }
 
