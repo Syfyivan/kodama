@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 // gif.js's module top-level only defines constants/functions (no `document`), so
 // importing it in node is safe as long as we don't call initGifBackend.
-const { animationStateFor, initGifBackend, pickStageFile, resolvePetImageSource } = await import('../src/renderer/backends/gif.js')
+const { animationStateFor, initGifBackend, motionStateFor, pickStageFile, resolvePetImageSource } = await import('../src/renderer/backends/gif.js')
 
 const SLIME = [
   { file: 'green.png', minLevel: 1 },
@@ -52,11 +52,27 @@ test('missing minLevel defaults to 1', () => {
 })
 
 test('animation states preserve known reactions and safely fall back to idle', () => {
-  for (const state of ['idle', 'working', 'looking', 'replying', 'waiting', 'done', 'failed', 'tap']) {
+  for (const state of [
+    'idle', 'working', 'looking', 'replying', 'waiting', 'done', 'failed', 'tap',
+    'blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod',
+  ]) {
     assert.equal(animationStateFor(state), state)
   }
   assert.equal(animationStateFor('unknown-status'), 'idle')
   assert.equal(animationStateFor(null), 'idle')
+})
+
+test('companion motion names map to distinct transient sprite actions', () => {
+  assert.equal(motionStateFor('Look'), 'looking')
+  assert.equal(motionStateFor('Blink'), 'blink')
+  assert.equal(motionStateFor('Hop'), 'hop')
+  assert.equal(motionStateFor('Stretch'), 'stretch')
+  assert.equal(motionStateFor('Sway'), 'sway')
+  assert.equal(motionStateFor('Wave'), 'wave')
+  assert.equal(motionStateFor('Doze'), 'doze')
+  assert.equal(motionStateFor('Nod'), 'nod')
+  assert.equal(motionStateFor('TapBody'), 'tap')
+  assert.equal(motionStateFor('not-a-motion'), '')
 })
 
 test('custom pet image overrides built-in stage art without changing its stored file', () => {

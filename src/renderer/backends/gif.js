@@ -14,8 +14,39 @@
 // When `stages` is set, the growth level picks the sprite (e.g. a slime that
 // changes color as it levels up) and that sprite is shown for every status —
 // evolution is conveyed by the stage art, not per-status animations.
-const ANIMATION_STATES = new Set(['idle', 'looking', 'working', 'replying', 'waiting', 'done', 'failed', 'tap'])
+const ANIMATION_STATES = new Set([
+  'idle',
+  'looking',
+  'working',
+  'replying',
+  'waiting',
+  'done',
+  'failed',
+  'tap',
+  'blink',
+  'hop',
+  'stretch',
+  'sway',
+  'wave',
+  'doze',
+  'nod',
+])
 const TRANSIENT = new Set(['done', 'failed', 'waiting', 'tap'])
+const MOTION_ALIASES = Object.freeze({
+  look: 'looking',
+  looking: 'looking',
+  tap: 'tap',
+  touch: 'tap',
+  blink: 'blink',
+  hop: 'hop',
+  jump: 'hop',
+  stretch: 'stretch',
+  sway: 'sway',
+  wave: 'wave',
+  doze: 'doze',
+  sleep: 'doze',
+  nod: 'nod',
+})
 
 // CSS owns the motion vocabulary. Keep renderer input constrained to that
 // vocabulary so an unexpected backend status cannot strand the pet in a static
@@ -23,6 +54,13 @@ const TRANSIENT = new Set(['done', 'failed', 'waiting', 'tap'])
 export function animationStateFor(state) {
   const normalized = typeof state === 'string' ? state.trim().toLowerCase() : ''
   return ANIMATION_STATES.has(normalized) ? normalized : 'idle'
+}
+
+export function motionStateFor(motion) {
+  const normalized = typeof motion === 'string' ? motion.trim().toLowerCase() : ''
+  if (MOTION_ALIASES[normalized]) return MOTION_ALIASES[normalized]
+  if (/tap|touch/.test(normalized)) return 'tap'
+  return ''
 }
 
 // Pick the stage whose minLevel is the highest one still <= level. Order-independent
@@ -121,9 +159,12 @@ export function initGifBackend(cfg = {}) {
       const r = img.getBoundingClientRect()
       return { x: r.x, y: r.y, width: r.width, height: r.height }
     },
-    // logical motion from reactions / tap ('Idle' | 'Tap')
+    // Logical motions are transient overlays on the current task status. The
+    // CSS backend supplies a richer vocabulary for static pet art, while an
+    // unknown Live2D-style motion remains a safe no-op here.
     playMotion(pref) {
-      if (/tap|touch/i.test(pref)) show('tap', true)
+      const state = motionStateFor(pref)
+      if (state) show(state, true)
     },
     // status from reactions (working/done/failed/waiting/looking/replying/idle)
     setStatus(status) {

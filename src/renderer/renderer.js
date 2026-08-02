@@ -1640,14 +1640,14 @@ function scheduleCompanionMoment(delay = companionDelayMs()) {
 function playCompanionMoment() {
   companionTimer = null
   if (!companionModeActive) return
-  if (document.hidden || panelVisible || !bubble.classList.contains('hidden')) {
+  if (document.hidden || panelVisible || isMoveModeActive() || !bubble.classList.contains('hidden')) {
     scheduleCompanionMoment(8000)
     return
   }
   const moment = companionMomentAt(companionMomentIndex)
   companionMomentIndex += 1
   backend?.playMotion?.(moment.motion, 'normal')
-  showPetDialogue(moment.text)
+  if (moment.text) showPetDialogue(moment.text)
   scheduleCompanionMoment()
 }
 

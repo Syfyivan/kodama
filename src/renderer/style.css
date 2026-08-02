@@ -137,6 +137,34 @@ body[data-pet-skin="peach"] {
   animation: kodama-tap 720ms cubic-bezier(.2, .8, .2, 1) 1 both;
 }
 
+#pet-gif[data-state="blink"] {
+  animation: kodama-blink 820ms ease-in-out 1 both;
+}
+
+#pet-gif[data-state="hop"] {
+  animation: kodama-hop 1.12s cubic-bezier(.2, .8, .2, 1) 1 both;
+}
+
+#pet-gif[data-state="stretch"] {
+  animation: kodama-stretch 1.8s ease-in-out 1 both;
+}
+
+#pet-gif[data-state="sway"] {
+  animation: kodama-sway 2.25s ease-in-out 1 both;
+}
+
+#pet-gif[data-state="wave"] {
+  animation: kodama-wave 1.75s ease-in-out 1 both;
+}
+
+#pet-gif[data-state="doze"] {
+  animation: kodama-doze 2.45s ease-in-out 1 both;
+}
+
+#pet-gif[data-state="nod"] {
+  animation: kodama-nod 1.35s ease-in-out 1 both;
+}
+
 body[data-companion-active="true"] #pet-gif[data-state="idle"] {
   animation-duration: 3.2s;
 }
@@ -204,6 +232,57 @@ body.move-mode #pet-gif {
   61% { translate: 0 .9%; scale: 1.035 .97; }
   79% { translate: 0 -2%; scale: .99 1.018; }
   100% { translate: 0 0; scale: 1; }
+}
+
+@keyframes kodama-blink {
+  0%, 16%, 46%, 76%, 100% { translate: 0 0; scale: 1; }
+  28%, 59% { translate: 0 1.8%; scale: 1.012 .965; }
+}
+
+@keyframes kodama-hop {
+  0%, 100% { translate: 0 0; rotate: 0deg; scale: 1; }
+  18% { translate: 0 2.4%; scale: 1.055 .935; }
+  42% { translate: 0 -10%; rotate: -1.6deg; scale: .975 1.045; }
+  64% { translate: 0 .8%; rotate: 1deg; scale: 1.03 .97; }
+  82% { translate: 0 -2.2%; rotate: -.5deg; scale: .992 1.012; }
+}
+
+@keyframes kodama-stretch {
+  0%, 100% { translate: 0 0; rotate: 0deg; scale: 1; }
+  20% { translate: 0 2.2%; rotate: -1deg; scale: 1.045 .95; }
+  48% { translate: 0 -5.8%; rotate: 1.2deg; scale: .965 1.065; }
+  67% { translate: 0 -4.6%; rotate: -1.4deg; scale: .975 1.05; }
+  84% { translate: 0 .7%; rotate: .4deg; scale: 1.018 .985; }
+}
+
+@keyframes kodama-sway {
+  0%, 100% { translate: 0 0; rotate: 0deg; scale: 1; }
+  22% { translate: -2.2% -1.4%; rotate: -3.2deg; scale: 1.008 .995; }
+  48% { translate: 1.2% -.4%; rotate: 2.4deg; scale: .997 1.006; }
+  72% { translate: -1% -1%; rotate: -1.6deg; scale: 1.004 .998; }
+}
+
+@keyframes kodama-wave {
+  0%, 100% { translate: 0 0; rotate: 0deg; scale: 1; }
+  18% { translate: -1.2% -2.2%; rotate: -2deg; scale: 1.012 .992; }
+  34% { translate: 2.4% -3.5%; rotate: 4deg; scale: 1.018 .988; }
+  51% { translate: -1.2% -2.8%; rotate: -3.2deg; scale: 1.012 .993; }
+  68% { translate: 2% -3.2%; rotate: 3.4deg; scale: 1.016 .99; }
+  84% { translate: 0 .4%; rotate: -.6deg; scale: .995 1.008; }
+}
+
+@keyframes kodama-doze {
+  0%, 100% { translate: 0 0; rotate: 0deg; scale: 1; }
+  22% { translate: 0 2.2%; rotate: 1.4deg; scale: 1.012 .985; }
+  48% { translate: 0 4%; rotate: -2.5deg; scale: 1.02 .974; }
+  70% { translate: 0 3.2%; rotate: -1.8deg; scale: 1.014 .982; }
+  84% { translate: 0 -1.5%; rotate: .8deg; scale: .992 1.012; }
+}
+
+@keyframes kodama-nod {
+  0%, 100% { translate: 0 0; rotate: 0deg; scale: 1; }
+  22%, 58% { translate: 0 2.8%; rotate: -1deg; scale: 1.025 .968; }
+  40%, 76% { translate: 0 -1.8%; rotate: .7deg; scale: .988 1.02; }
 }
 
 #pet-growth-layer {

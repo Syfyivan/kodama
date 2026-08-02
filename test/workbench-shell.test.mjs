@@ -97,4 +97,8 @@ test('hidden task bubbles switch the pet into an independent dialogue and motion
   assert.match(renderer, /showPetDialogue\(moment\.text\)/)
   assert.match(petCss, /#pet-dialogue\s*\{[\s\S]*?opacity:\s*var\(--pet-opacity\)/)
   assert.match(petCss, /body\[data-companion-active="true"\] #pet-gif\[data-state="idle"\]/)
+  for (const action of ['blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod']) {
+    assert.match(petCss, new RegExp(`#pet-gif\\[data-state="${action}"\\]`))
+    assert.match(petCss, new RegExp(`@keyframes kodama-${action}`))
+  }
 })
