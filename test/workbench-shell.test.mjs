@@ -84,6 +84,7 @@ test('desktop task bubbles follow pet opacity and can be hidden without deleting
   assert.doesNotMatch(renderer, /--task-bubble-opacity/)
   assert.match(renderer, /uiSettings\.taskBubblesVisible\s*\?\s*userTaskBubbleTasks\(\)\s*:\s*\[\]/)
   assert.match(renderer, /data-hide-task-bubbles/)
+  assert.match(renderer, /function looseSessionBubbleHtml[\s\S]*?data-open-user-task=""[\s\S]*?data-hide-task-bubbles="1"/)
   assert.match(petCss, /#bubble\s*\{[\s\S]*?opacity:\s*var\(--pet-opacity\)/)
   assert.match(main, /taskBubblesVisible: state\.taskBubblesVisible !== false/)
   assert.match(main, /taskBubblesVisible \? '隐藏任务气泡' : '显示任务气泡'/)
