@@ -1,12 +1,9 @@
 export const COMPANION_MOMENTS = Object.freeze([
-  Object.freeze({ text: '任务卡收好啦，我活动一下～', motion: 'Hop' }),
-  Object.freeze({ text: '', motion: 'Look' }),
-  Object.freeze({ text: '', motion: 'Blink' }),
-  Object.freeze({ text: '我在这里，随时叫我。', motion: 'Wave' }),
-  Object.freeze({ text: '', motion: 'Stretch' }),
-  Object.freeze({ text: '', motion: 'Sway' }),
-  Object.freeze({ text: '要不要休息一下眼睛？', motion: 'Doze' }),
-  Object.freeze({ text: '', motion: 'Nod' }),
+  Object.freeze({ text: '我在这里，随时叫我。', motion: '' }),
+  Object.freeze({ text: '', motion: 'Doze' }),
+  Object.freeze({ text: '要不要休息一下眼睛？', motion: '' }),
+  Object.freeze({ text: '', motion: 'Wave' }),
+  Object.freeze({ text: '', motion: 'Eat' }),
 ])
 
 export function isActiveCompanionMode(settings = {}) {
@@ -20,5 +17,10 @@ export function companionMomentAt(index = 0) {
 
 export function companionDelayMs(random = Math.random) {
   const sample = Math.min(1, Math.max(0, Number(random()) || 0))
-  return Math.round(14_000 + sample * 18_000)
+  return Math.round(55_000 + sample * 55_000)
+}
+
+export function companionInitialDelayMs(random = Math.random) {
+  const sample = Math.min(1, Math.max(0, Number(random()) || 0))
+  return Math.round(25_000 + sample * 20_000)
 }

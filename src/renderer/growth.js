@@ -173,9 +173,9 @@ export function feedManually() {
   }
   state.food -= cost
   const expGain = Math.max(1, Math.round(cost * FEED_EXP_RATE))
-  hooks.playMotion?.('Tap')
   hooks.say?.(`投喂 -${cost}🍖 → +${expGain}⭐ 😋`, 2600)
-  applyGains(0, expGain) // 加经验 + 处理升级 + 持久化
+  const leveled = applyGains(0, expGain) // 加经验 + 处理升级 + 持久化
+  if (!leveled) hooks.playMotion?.('Eat')
   return { ok: true, cost, expGain, level: state.level }
 }
 

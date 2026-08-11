@@ -26,6 +26,7 @@ import {
 } from './config/ui-settings.js'
 import {
   companionDelayMs,
+  companionInitialDelayMs,
   companionMomentAt,
   isActiveCompanionMode,
 } from './companion-mode.js'
@@ -269,7 +270,7 @@ const TERMINAL_LAUNCHERS = new Set(['auto', 'cmux', 'orca'])
 const MOVE_MODE_MS = 15000
 const DEFAULT_UI_SETTINGS = {
   version: UI_SETTINGS_VERSION,
-  petScale: 0.72,
+  petScale: 0.42,
   petOpacity: 0.82,
   hitboxScale: 0.35,
   triggerMode: 'right',
@@ -485,6 +486,8 @@ async function init() {
         ...DEFAULT_PET_RENDER.gif,
         set: selectedFamily.set,
         stages: selectedFamily.stages,
+        map: selectedFamily.map || {},
+        frameAnimation: selectedFamily.frameAnimation === true,
       },
     } : localRender
     if (renderConfig.backend === 'gif') {
@@ -548,7 +551,6 @@ async function init() {
       say,
       playMotion: (g, p) => backend?.playMotion?.(g, p),
       onStatus: (s) => {
-        agentSyncStatus = s
         console.log('[kodama] status:', s)
         backend?.setStatus?.(s)
         syncEventPanel()
@@ -606,7 +608,13 @@ async function init() {
     const agentCfg = (await importLocal('./config/agent.local.js'))?.AGENT || {}
     activeAgentConfig = { bridgeUrl: agentCfg.bridgeUrl || DEFAULT_BRIDGE_URL, token: agentCfg.token || '' }
     disposeAgentSync?.() // tear down a prior SSE connection + probe timer if init re-runs
-    disposeAgentSync = connectAgentSync(handleAgentEvent, { ...agentCfg, onStatus: hooks.onStatus })
+    disposeAgentSync = connectAgentSync(handleAgentEvent, {
+      ...agentCfg,
+      onStatus: (status) => {
+        agentSyncStatus = status
+        syncEventPanel()
+      },
+    })
     window.pet.onAgentEvent?.(handleAgentEvent) // source 'local'
     window.pet.onAgentTaskBoardUpdate?.((state) => {
       applyAgentTaskState(state)
@@ -962,6 +970,8 @@ async function chooseAppearance(target) {
       ...DEFAULT_PET_RENDER.gif,
       set: family.set,
       stages: family.stages,
+      map: family.map || {},
+      frameAnimation: family.frameAnimation === true,
     }
     backend?.setPetPack?.(activeGifConfig)
     syncAccessories()
@@ -1668,7 +1678,7 @@ function configureCompanionMode() {
   }
   if (companionTimer) clearTimeout(companionTimer)
   hidePetDialogue()
-  scheduleCompanionMoment(changed ? 650 : companionDelayMs())
+  scheduleCompanionMoment(changed ? companionInitialDelayMs() : companionDelayMs())
 }
 
 let tokenStats = { today: 0, last7: 0, total: 0, local: {}, lark: {} }

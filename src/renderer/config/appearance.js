@@ -1,5 +1,5 @@
-// Built-in appearance choices. Art remains CSS-rendered so every skin and
-// growth stage works with both the public Live2D model and local GIF pets.
+// Built-in appearance choices. The default mouse uses APNG frame animation;
+// other families and custom uploads keep the existing static/CSS behavior.
 export const PET_SKINS = [
   {
     id: 'forest',
@@ -51,9 +51,9 @@ export const GROWTH_STAGES = [
   },
 ]
 
-function familyStages(labels = []) {
+function familyStages(labels = [], files = []) {
   return GROWTH_STAGES.map(({ file, minLevel, label }, index) => ({
-    file,
+    file: files[index] || file,
     minLevel,
     label: labels[index] || label,
   }))
@@ -63,13 +63,31 @@ export const PET_FAMILIES = [
   {
     id: 'aetherling',
     set: 'aetherling',
-    label: '星翼精灵',
-    shortLabel: '星灵',
-    symbol: '✦',
-    description: '会收集 Agent 星光的蓝色小精灵',
-    palette: ['#78c7ff', '#dff7ff'],
+    label: '键缝小鼠',
+    shortLabel: '小鼠',
+    symbol: '⌁',
+    description: '住在键盘缝里、专门把代码 bug 拖回窝的小老鼠',
+    palette: ['#d7a05e', '#f6dfb2'],
     preview: 'young.png',
-    stages: familyStages(['星芽之卵', '星光幼灵', '星翼精灵']),
+    frameAnimation: true,
+    stages: familyStages(
+      ['键帽小窝', '键缝小鼠', '捉虫能手'],
+      ['doze-animated.png', 'young-animated.png', 'winged-animated.png'],
+    ),
+    map: {
+      thinking: 'thinking-animated.png',
+      looking: 'hero.png',
+      working: 'working-animated.png',
+      replying: 'working-animated.png',
+      waiting: 'waiting-animated.png',
+      eating: 'eating-animated.png',
+      done: 'done-animated.png',
+      failed: 'failed-animated.png',
+      tap: 'failed-animated.png',
+      hop: 'done-animated.png',
+      wave: 'done-animated.png',
+      doze: 'doze-animated.png',
+    },
   },
   {
     id: 'cloudfox',
@@ -122,6 +140,7 @@ export const DEFAULT_PET_RENDER = {
     displayWidth: 400,
     displayHeight: 400,
     stages: petFamilyById(DEFAULT_PET_FAMILY_ID).stages,
-    map: { idle: 'egg.png' },
+    map: petFamilyById(DEFAULT_PET_FAMILY_ID).map || {},
+    frameAnimation: petFamilyById(DEFAULT_PET_FAMILY_ID).frameAnimation === true,
   },
 }

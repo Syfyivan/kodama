@@ -22,6 +22,11 @@ test('lark task_done renders a 💬-prefixed bubble with the summary', () => {
   assert.deepEqual(out.status, ['done'])
 })
 
+test('a newly started task uses the thinking state before work begins', () => {
+  const out = collect({ type: 'task_started', source: 'local', text: '' })
+  assert.deepEqual(out.status, ['thinking'])
+})
+
 test('terminal bridge events show a readable fallback when text is empty', () => {
   const completed = collect({ type: 'task_done', source: 'lark', text: '' })
   const failed = collect({ type: 'task_failed', source: 'lark', text: '' })

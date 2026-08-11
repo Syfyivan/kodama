@@ -8,18 +8,20 @@
 //
 // cfg: {
 //   set,
-//   map: { idle, looking, working, replying, waiting, done, failed, tap },
+//   map: { idle, thinking, looking, working, replying, waiting, eating, done, failed, tap },
 //   stages: [{ file, minLevel }]  // optional level-based evolution
 // }
-// When `stages` is set, the growth level picks the sprite (e.g. a slime that
-// changes color as it levels up) and that sprite is shown for every status —
-// evolution is conveyed by the stage art, not per-status animations.
+// When `stages` is set, the growth level picks the idle sprite. A configured
+// per-status file can temporarily override it, then the backend returns to the
+// current growth pose when that reaction ends.
 const ANIMATION_STATES = new Set([
   'idle',
+  'thinking',
   'looking',
   'working',
   'replying',
   'waiting',
+  'eating',
   'done',
   'failed',
   'tap',
@@ -31,8 +33,15 @@ const ANIMATION_STATES = new Set([
   'doze',
   'nod',
 ])
-const TRANSIENT = new Set(['done', 'failed', 'waiting', 'tap'])
+const TRANSIENT = new Set(['done', 'failed', 'tap', 'eating'])
+const TERMINAL_REACTIONS = new Set(['done', 'failed'])
 const MOTION_ALIASES = Object.freeze({
+  think: 'thinking',
+  thinking: 'thinking',
+  eat: 'eating',
+  eating: 'eating',
+  snack: 'eating',
+  feed: 'eating',
   look: 'looking',
   looking: 'looking',
   tap: 'tap',
@@ -80,6 +89,11 @@ export function pickStageFile(stages, level) {
   return chosen || lowest || ''
 }
 
+export function pickStateFile(map, stageFile, state) {
+  if (state !== 'idle' && map?.[state]) return map[state]
+  return stageFile || map?.[state] || map?.idle || 'idle.gif'
+}
+
 export function resolvePetImageSource(base, file, customSource = '') {
   return String(customSource || '').trim() || `${base}${file}`
 }
@@ -88,6 +102,7 @@ export function initGifBackend(cfg = {}) {
   let base = `./pets/${cfg.set || 'default'}/`
   let map = cfg.map || {}
   let stages = Array.isArray(cfg.stages) ? cfg.stages : []
+  let frameAnimation = cfg.frameAnimation === true
   let currentLevel = 1
   let stageFile = stages.length ? pickStageFile(stages, 1) : ''
   let customSource = ''
@@ -109,12 +124,21 @@ export function initGifBackend(cfg = {}) {
   let ongoing = 'idle' // the looping baseline state to revert to
   let revertTimer
 
-  // Stage art (if any) overrides per-status files: the evolved sprite is always shown.
-  const fileFor = (state) => stageFile || map[state] || map.idle || 'idle.gif'
+  const syncFrameAnimationMode = () => {
+    img.setAttribute('data-frame-animation', String(frameAnimation && !customSource))
+  }
+
+  const fileFor = (state) => pickStateFile(map, stageFile, state)
 
   // Compare the resolved file (not the state) so a stage swap re-renders even when
   // the status is unchanged.
-  function restartCssAnimation() {
+  function restartAnimation(source) {
+    if (frameAnimation && !customSource) {
+      img.src = ''
+      void img.offsetWidth
+      img.src = source
+      return
+    }
     // Repeated taps/completions should still feel responsive even when the
     // sprite file and data-state are unchanged. This layout read happens only
     // for a repeated transient reaction, never in the animation frame loop.
@@ -124,20 +148,21 @@ export function initGifBackend(cfg = {}) {
   }
 
   function render(state, { restart = false } = {}) {
+    syncFrameAnimationMode()
     const animationState = animationStateFor(state)
     const file = fileFor(animationState)
     const source = resolvePetImageSource(base, file, customSource)
     const sameState = img.getAttribute('data-state') === animationState
     if (img.getAttribute('data-source') === source) {
       img.setAttribute('data-state', animationState)
-      if (restart && sameState) restartCssAnimation()
+      if (restart && sameState) restartAnimation(source)
       return
     }
     img.setAttribute('data-file', file)
     img.setAttribute('data-source', source)
     img.src = source
     img.setAttribute('data-state', animationState)
-    if (restart && sameState) restartCssAnimation()
+    if (restart && sameState) restartAnimation(source)
   }
 
   function show(state, transient) {
@@ -170,6 +195,7 @@ export function initGifBackend(cfg = {}) {
     setStatus(status) {
       if (status) {
         const animationState = animationStateFor(status)
+        if (TERMINAL_REACTIONS.has(animationState)) ongoing = 'idle'
         show(animationState, TRANSIENT.has(animationState))
       }
     },
@@ -187,6 +213,7 @@ export function initGifBackend(cfg = {}) {
       base = `./pets/${pack.set || 'default'}/`
       map = pack.map || {}
       stages = Array.isArray(pack.stages) ? pack.stages : []
+      frameAnimation = pack.frameAnimation === true
       stageFile = stages.length ? pickStageFile(stages, currentLevel) : ''
       render(img.getAttribute('data-state') || ongoing)
     },
@@ -195,6 +222,7 @@ export function initGifBackend(cfg = {}) {
       if (next === customSource) return
       customSource = next
       img.setAttribute('data-custom-style', customSource ? 'true' : 'false')
+      syncFrameAnimationMode()
       render(img.getAttribute('data-state') || ongoing)
     },
   }

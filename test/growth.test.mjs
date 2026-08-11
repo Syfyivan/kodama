@@ -54,6 +54,14 @@ test('unknown event type feeds nothing', async () => {
   assert.equal(getState().exp, before)
 })
 
+test('manual feeding plays the dedicated eating animation', async () => {
+  const motions = []
+  setLoadedState({ level: 50, exp: 0, food: 10, totalFed: 10 })
+  await initGrowth({ say() {}, playMotion: motion => motions.push(motion) })
+  assert.equal(feedManually().ok, true)
+  assert.deepEqual(motions, ['Eat'])
+})
+
 test('feedTokens only sets a baseline on first call (no feed)', () => {
   const before = getState().food
   feedTokens(10000) // first call -> baseline

@@ -97,8 +97,19 @@ test('hidden task bubbles switch the pet into an independent dialogue and motion
   assert.match(renderer, /showPetDialogue\(moment\.text\)/)
   assert.match(petCss, /#pet-dialogue\s*\{[\s\S]*?opacity:\s*var\(--pet-opacity\)/)
   assert.match(petCss, /body\[data-companion-active="true"\] #pet-gif\[data-state="idle"\]/)
-  for (const action of ['blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod']) {
+  assert.match(petCss, /#pet-gif\[data-frame-animation="true"\][^{]*\{[^}]*animation:\s*none\s*!important/)
+  for (const action of ['thinking', 'eating', 'blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod']) {
     assert.match(petCss, new RegExp(`#pet-gif\\[data-state="${action}"\\]`))
     assert.match(petCss, new RegExp(`@keyframes kodama-${action}`))
+  }
+})
+
+test('every size control uses the compact 12% to 75% range and 42% default', () => {
+  assert.match(petHtml, /id="setting-pet-scale"[^>]*min="12"[^>]*max="75"/)
+  assert.match(html, /id="petScale"[^>]*min="12"[^>]*max="75"/)
+  assert.match(main, /petScale:\s*0\.42/)
+  for (const scale of ['0.15', '0.28', '0.42', '0.65']) {
+    const escapedScale = scale.replace('.', '\\.')
+    assert.match(main, new RegExp(`setPetScale\\(${escapedScale}\\)`))
   }
 })

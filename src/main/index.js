@@ -1055,7 +1055,7 @@ function resetPetPosition() {
   sendToPet('pet:apply-ui-patch', {
     petX: null,
     petY: null,
-    petScale: 0.72,
+    petScale: 0.42,
     petOpacity: 0.82,
   })
 }
@@ -3542,7 +3542,7 @@ function startLocalAgentServer() {
         // MCP set_state tool (src/mcp/) → drive an arbitrary pet status from an
         // agent. Maps the five lifecycle states to local reaction events.
         const STATE_EVENTS = {
-          thinking: { type: 'task_progress', text: 'Agent 思考中…' },
+          thinking: { type: 'task_started', text: 'Agent 思考中…' },
           working: { type: 'task_progress', text: 'Agent 工作中…' },
           done: { type: 'task_done', text: '' },
           waiting: { type: 'task_waiting', text: '需要你确认' },
@@ -3736,10 +3736,10 @@ function refreshTray() {
   items.push({
     label: '大小',
     submenu: [
-      { label: '很小', click: () => setPetScale(0.5) },
-      { label: '小', click: () => setPetScale(0.72) },
-      { label: '中（默认）', click: () => setPetScale(0.95) },
-      { label: '大', click: () => setPetScale(1.2) },
+      { label: '很小', click: () => setPetScale(0.15) },
+      { label: '小', click: () => setPetScale(0.28) },
+      { label: '中（默认）', click: () => setPetScale(0.42) },
+      { label: '大', click: () => setPetScale(0.65) },
     ],
   })
   items.push({ label: '配饰', submenu: buildAccessoryMenu() })

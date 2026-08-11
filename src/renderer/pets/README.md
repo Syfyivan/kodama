@@ -19,6 +19,20 @@ cp ../config/render.local.example.js ../config/render.local.js && pnpm start
 
 等级阈值与配色在 `render.local.example.js` 的 `stages` 里可调。
 
+## 内置:aetherling（Kodama 原创）
+
+`aetherling/` 是 Kodama 的原创角色「键缝小鼠」：它住在键盘缝里，专门把
+代码 bug 拖回窝。成长形态是「键帽小窝 → 键缝小鼠 → 捉虫能手」；工作、查看、
+等待、完成、失败、点击和睡觉会切换为同一张角色设定稿里的对应动作，再回到
+当前成长形态。V3 的 `*-animated.png` 是透明 APNG，动画发生在眼睛、耳朵、
+手脚、尾巴和道具内部，不再依赖整张图片摇晃。完整设计归档见
+`docs/design/keyboard-mouse/`。
+
+任务刚开始会使用 `thinking-animated.png` 托腮思考；需要确认时使用
+`waiting-animated.png` 从键帽后探头；主动投喂或稀有陪伴时使用
+`eating-animated.png` 吃 Bug 饼干。三者与原有待机、工作、完成、失败、睡觉
+共享同一角色识别点和 512×512 透明画布。
+
 ## 自定义:你自己的私人 GIF
 
 ## 用法
@@ -37,6 +51,7 @@ cp ../config/render.local.example.js ../config/render.local.js && pnpm start
 
 ## ⚠️ 版权
 
-本目录与 `config/render.local.js` 已 **gitignore**，不会被提交或打包分发。
+未列入内置素材名单的自定义目录与 `config/render.local.js` 已 **gitignore**，
+不会被提交或打包分发。
 网上找的 GIF 多数有版权，**仅限本机私人使用，不要公开 / 分发 / 提交**。
 对外发布请用默认的 Live2D 后端（官方免费可商用模型）。

@@ -3,7 +3,14 @@ import { test } from 'node:test'
 
 // gif.js's module top-level only defines constants/functions (no `document`), so
 // importing it in node is safe as long as we don't call initGifBackend.
-const { animationStateFor, initGifBackend, motionStateFor, pickStageFile, resolvePetImageSource } = await import('../src/renderer/backends/gif.js')
+const {
+  animationStateFor,
+  initGifBackend,
+  motionStateFor,
+  pickStageFile,
+  pickStateFile,
+  resolvePetImageSource,
+} = await import('../src/renderer/backends/gif.js')
 
 const SLIME = [
   { file: 'green.png', minLevel: 1 },
@@ -51,9 +58,21 @@ test('missing minLevel defaults to 1', () => {
   assert.equal(pickStageFile([{ file: 'only.png' }], 1), 'only.png')
 })
 
+test('status art overrides the growth pose while idle keeps the current stage', () => {
+  const map = {
+    working: 'working.png',
+    done: 'done.png',
+  }
+  assert.equal(pickStateFile(map, 'young.png', 'idle'), 'young.png')
+  assert.equal(pickStateFile(map, 'young.png', 'working'), 'working.png')
+  assert.equal(pickStateFile(map, 'young.png', 'done'), 'done.png')
+  assert.equal(pickStateFile(map, 'young.png', 'looking'), 'young.png')
+  assert.equal(pickStateFile({ idle: 'idle.png' }, '', 'idle'), 'idle.png')
+})
+
 test('animation states preserve known reactions and safely fall back to idle', () => {
   for (const state of [
-    'idle', 'working', 'looking', 'replying', 'waiting', 'done', 'failed', 'tap',
+    'idle', 'thinking', 'working', 'looking', 'replying', 'waiting', 'eating', 'done', 'failed', 'tap',
     'blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod',
   ]) {
     assert.equal(animationStateFor(state), state)
@@ -63,6 +82,9 @@ test('animation states preserve known reactions and safely fall back to idle', (
 })
 
 test('companion motion names map to distinct transient sprite actions', () => {
+  assert.equal(motionStateFor('Think'), 'thinking')
+  assert.equal(motionStateFor('Eat'), 'eating')
+  assert.equal(motionStateFor('Snack'), 'eating')
   assert.equal(motionStateFor('Look'), 'looking')
   assert.equal(motionStateFor('Blink'), 'blink')
   assert.equal(motionStateFor('Hop'), 'hop')
@@ -99,13 +121,16 @@ test('switching a running GIF backend updates the image source immediately', () 
     body: { appendChild() {} },
   }
   try {
-    const backend = initGifBackend({ set: 'aetherling', map: { idle: 'egg.png' } })
+    const backend = initGifBackend({ set: 'aetherling', map: { idle: 'egg.png' }, frameAnimation: true })
     assert.equal(img.style.objectFit, 'contain', 'non-square custom images must keep their aspect ratio')
     assert.equal(img.src, './pets/aetherling/egg.png')
+    assert.equal(img.getAttribute('data-frame-animation'), 'true')
     backend.setCustomSource('file:///Users/me/Kodama/custom.gif')
     assert.equal(img.src, 'file:///Users/me/Kodama/custom.gif')
+    assert.equal(img.getAttribute('data-frame-animation'), 'false')
     backend.setCustomSource('')
     assert.equal(img.src, './pets/aetherling/egg.png')
+    assert.equal(img.getAttribute('data-frame-animation'), 'true')
   } finally {
     globalThis.document = previousDocument
   }
@@ -144,6 +169,69 @@ test('switching built-in pet families preserves the current evolution level', ()
       ],
     })
     assert.equal(img.src, './pets/moonbunny/young.png')
+  } finally {
+    globalThis.document = previousDocument
+  }
+})
+
+test('a configured reaction swaps the live sprite and idle restores its growth pose', () => {
+  const attributes = new Map()
+  const img = {
+    style: { removeProperty() {} },
+    addEventListener() {},
+    getAttribute: (key) => attributes.get(key) || '',
+    setAttribute: (key, value) => attributes.set(key, String(value)),
+  }
+  const previousDocument = globalThis.document
+  globalThis.document = {
+    createElement: () => img,
+    getElementById: () => null,
+    body: { appendChild() {} },
+  }
+  try {
+    const backend = initGifBackend({
+      set: 'aetherling',
+      stages: [{ file: 'young.png', minLevel: 1 }],
+      map: { working: 'working.png' },
+    })
+    assert.equal(img.src, './pets/aetherling/young.png')
+    backend.setStatus('working')
+    assert.equal(img.src, './pets/aetherling/working.png')
+    assert.equal(img.getAttribute('data-state'), 'working')
+    backend.setStatus('idle')
+    assert.equal(img.src, './pets/aetherling/young.png')
+    assert.equal(img.getAttribute('data-state'), 'idle')
+  } finally {
+    globalThis.document = previousDocument
+  }
+})
+
+test('terminal reactions return to idle art instead of resuming stale working art', async () => {
+  const attributes = new Map()
+  const img = {
+    style: { removeProperty() {} },
+    addEventListener() {},
+    getAttribute: (key) => attributes.get(key) || '',
+    setAttribute: (key, value) => attributes.set(key, String(value)),
+  }
+  const previousDocument = globalThis.document
+  globalThis.document = {
+    createElement: () => img,
+    getElementById: () => null,
+    body: { appendChild() {} },
+  }
+  try {
+    const backend = initGifBackend({
+      set: 'aetherling',
+      stages: [{ file: 'young-animated.png', minLevel: 1 }],
+      map: { working: 'working-animated.png', done: 'done-animated.png' },
+    })
+    backend.setStatus('working')
+    backend.setStatus('done')
+    assert.equal(img.src, './pets/aetherling/done-animated.png')
+    await new Promise(resolve => setTimeout(resolve, 2700))
+    assert.equal(img.src, './pets/aetherling/young-animated.png')
+    assert.equal(img.getAttribute('data-state'), 'idle')
   } finally {
     globalThis.document = previousDocument
   }
