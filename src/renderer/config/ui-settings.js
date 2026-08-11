@@ -1,9 +1,11 @@
-export const UI_SETTINGS_VERSION = 6
+export const UI_SETTINGS_VERSION = 7
 export const PET_SCALE_MIN = 0.12
 export const PET_SCALE_MAX = 0.75
+export const PERFORMANCE_MODES = Object.freeze(['balanced', 'realtime', 'saver'])
 const COMPACT_PET_UI_SETTINGS_VERSION = 3
 const SHARED_BUBBLE_OPACITY_UI_SETTINGS_VERSION = 4
-const PREVIOUS_UI_SETTINGS_VERSION = 5
+const WIDE_PET_UI_SETTINGS_VERSION = 5
+const PREVIOUS_UI_SETTINGS_VERSION = 6
 const PREVIOUS_PET_SCALE_MIN = 0.4
 const WIDE_SCALE_MIN = 0.2
 const WIDE_SCALE_MAX = 1.25
@@ -12,6 +14,10 @@ export function clampPetScale(value, fallback) {
   const n = Number(value)
   if (!Number.isFinite(n)) return fallback
   return Math.min(PET_SCALE_MAX, Math.max(PET_SCALE_MIN, n))
+}
+
+export function normalizePerformanceMode(value) {
+  return PERFORMANCE_MODES.includes(value) ? value : 'balanced'
 }
 
 function remapWidePetScale(value) {
@@ -33,7 +39,15 @@ export function uiSettingsSourceForVersion(raw = {}) {
     return {
       ...raw,
       version: UI_SETTINGS_VERSION,
+      performanceMode: normalizePerformanceMode(raw.performanceMode),
+    }
+  }
+  if (raw.version === WIDE_PET_UI_SETTINGS_VERSION) {
+    return {
+      ...raw,
+      version: UI_SETTINGS_VERSION,
       petScale: remapWidePetScale(raw.petScale),
+      performanceMode: 'balanced',
     }
   }
   if (raw.version === SHARED_BUBBLE_OPACITY_UI_SETTINGS_VERSION) {
@@ -42,6 +56,7 @@ export function uiSettingsSourceForVersion(raw = {}) {
       ...settings,
       version: UI_SETTINGS_VERSION,
       petScale: remapWidePetScale(raw.petScale),
+      performanceMode: 'balanced',
     }
   }
   if (raw.version !== COMPACT_PET_UI_SETTINGS_VERSION) return {}
@@ -50,6 +65,7 @@ export function uiSettingsSourceForVersion(raw = {}) {
   return {
     ...settings,
     version: UI_SETTINGS_VERSION,
+    performanceMode: 'balanced',
     petScale: remapWidePetScale(
       Number.isFinite(petScale) && petScale <= PREVIOUS_PET_SCALE_MIN
         ? WIDE_SCALE_MIN

@@ -113,3 +113,13 @@ test('every size control uses the compact 12% to 75% range and 42% default', () 
     assert.match(main, new RegExp(`setPetScale\\(${escapedScale}\\)`))
   }
 })
+
+test('performance mode is available in both the pet panel and the unified settings page', () => {
+  assert.match(petHtml, /id="setting-performance-mode"/)
+  assert.match(html, /id="performanceMode"/)
+  for (const mode of ['balanced', 'realtime', 'saver']) {
+    assert.match(petHtml, new RegExp(`data-performance-mode="${mode}"`))
+    assert.match(html, new RegExp(`data-v="${mode}"`))
+  }
+  assert.match(manage, /\['triggerMode', 'edgeMode', 'performanceMode'\]/)
+})

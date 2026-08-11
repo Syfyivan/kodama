@@ -236,6 +236,12 @@
               <div class="settings-toggle"><span>语音播报</span><button class="settings-switch" id="ttsEnabled" type="button"></button></div>
             </section>
 
+            <section class="settings-card settings-card-wide">
+              <h3>性能模式</h3>
+              <div class="settings-row"><label>常驻策略</label><div class="settings-segment settings-segment-3" id="performanceMode"><button data-v="balanced">均衡</button><button data-v="realtime">实时</button><button data-v="saver">省电</button></div><span></span></div>
+              <p class="settings-muted">均衡模式每 3 分钟检查飞书；实时模式才会加载飞书网页；省电模式减少动画并每 10 分钟检查。</p>
+            </section>
+
             <section class="settings-card">
               <h3>番茄钟（分钟）</h3>
               <div class="settings-number"><span>专注时长</span><input id="focusMinutes" type="number" min="1" max="180" /></div>

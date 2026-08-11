@@ -13,6 +13,10 @@ let getBounds = () => null
 let equipped = {}
 let renderedKey = ''
 let appearance = { skinId: 'forest', stageId: 'egg' }
+let scheduledFrame = 0
+let trackingFrame = 0
+let continuousTracking = false
+let lastTrackingAt = 0
 
 function ensureLayer() {
   if (layer) return layer
@@ -107,24 +111,42 @@ function position() {
   }
 }
 
-function tick() {
-  position()
-  requestAnimationFrame(tick)
+function schedulePosition() {
+  if (scheduledFrame) return
+  scheduledFrame = requestAnimationFrame(() => {
+    scheduledFrame = 0
+    position()
+  })
+}
+
+function trackMovingModel(now) {
+  if (!continuousTracking) {
+    trackingFrame = 0
+    return
+  }
+  if (now - lastTrackingAt >= 80) {
+    lastTrackingAt = now
+    position()
+  }
+  trackingFrame = requestAnimationFrame(trackMovingModel)
 }
 
 export function initAccessoryLayer(boundsGetter, options = {}) {
   getBounds = boundsGetter || getBounds
+  continuousTracking = options.continuousTracking === true
   if (Array.isArray(options.accessories) && options.accessories.length) {
     byId = new Map(options.accessories.map((a) => [a.id, a]))
   }
   ensureLayer()
   ensureGrowthLayer()
-  requestAnimationFrame(tick)
+  schedulePosition()
+  if (continuousTracking && !trackingFrame) trackingFrame = requestAnimationFrame(trackMovingModel)
   return {
+    refresh: schedulePosition,
     setEquipped(nextEquipped = {}) {
       equipped = { ...nextEquipped }
       render()
-      position()
+      schedulePosition()
     },
     setAppearance(nextAppearance = {}) {
       appearance = { ...appearance, ...nextAppearance }
@@ -135,7 +157,14 @@ export function initAccessoryLayer(boundsGetter, options = {}) {
       root.dataset.skin = skinId
       document.body.dataset.petStage = stageId
       document.body.dataset.petSkin = skinId
-      position()
+      schedulePosition()
+    },
+    dispose() {
+      continuousTracking = false
+      if (scheduledFrame) cancelAnimationFrame(scheduledFrame)
+      if (trackingFrame) cancelAnimationFrame(trackingFrame)
+      scheduledFrame = 0
+      trackingFrame = 0
     },
   }
 }

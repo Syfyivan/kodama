@@ -17,6 +17,7 @@ const { loadLarkAssistantCache, saveLarkAssistantCache } = require('./lark-assis
 const { createLarkMessageArchive } = require('./lark-message-archive')
 const { createLarkBaseSink } = require('./lark-base-sink')
 const { createLarkWebPush } = require('./lark-web-push')
+const { normalizePerformanceMode, performanceProfile } = require('./performance-mode')
 const { createWorkItemStore } = require('./work-items')
 const { buildWorkItemAgentPrompt, normalizeMode, parseWorkItemAgentResult } = require('./work-item-agent')
 const { createKnowledgeHub } = require('./knowledge-hub')
@@ -64,6 +65,7 @@ let pendingWorkbenchNavigation = {
   initialTitle: '',
 }
 let lastUiSettings = null
+let currentPerformanceMode = 'balanced'
 let tray
 let pomodoro = null
 let sedentaryTimer = null
@@ -73,6 +75,7 @@ let petUiMenuState = {
   soundEnabled: true,
   notificationsEnabled: true,
   taskBubblesVisible: true,
+  performanceMode: 'balanced',
 }
 let localEventCount = 0
 let lastLocalEvent = null
@@ -298,6 +301,43 @@ function startLarkWebPush() {
   })
   larkWebPush.start()
   return larkWebPush
+}
+
+function larkWebPushStatus() {
+  return {
+    ok: true,
+    enabled: true,
+    running: false,
+    windowVisible: false,
+    injected: false,
+    error: '',
+    performanceMode: currentPerformanceMode,
+    ...(larkWebPush?.getStatus?.() || {}),
+  }
+}
+
+function applyPerformanceMode(value) {
+  const mode = normalizePerformanceMode(value)
+  const profile = performanceProfile(mode)
+  currentPerformanceMode = mode
+  petUiMenuState.performanceMode = mode
+  larkInbox?.setPollIntervalMs?.(profile.larkPollIntervalMs)
+  if (profile.larkWebPush) {
+    startLarkWebPush()
+  } else if (larkWebPush) {
+    larkWebPush.stop()
+    larkWebPush = null
+  }
+  sendToPet('pet:lark-web-push-updated', larkWebPushStatus())
+  refreshTray()
+  return { mode, profile, larkWebPush: larkWebPushStatus() }
+}
+
+function setPerformanceModeFromUser(value) {
+  const result = applyPerformanceMode(value)
+  lastUiSettings = { ...(lastUiSettings || {}), performanceMode: result.mode }
+  sendToPet('pet:apply-ui-patch', { performanceMode: result.mode })
+  return result
 }
 
 function broadcastLarkAgenda(state) {
@@ -1431,7 +1471,10 @@ ipcMain.handle('pet:get-display-areas', () => displayAreaSnapshot())
 
 // Management window <-> pet renderer ui-settings sync, brokered by main.
 ipcMain.on('pet:report-ui-settings', (_e, settings) => {
-  if (settings && typeof settings === 'object') lastUiSettings = settings
+  if (settings && typeof settings === 'object') {
+    lastUiSettings = settings
+    applyPerformanceMode(settings.performanceMode)
+  }
 })
 ipcMain.handle('pet:get-ui-settings', () => lastUiSettings)
 ipcMain.on('pet:patch-ui-settings', (_e, patch) => {
@@ -2729,22 +2772,21 @@ ipcMain.handle('pet:lark-base-open', async () => {
 })
 
 ipcMain.handle('pet:lark-web-push-status', () => {
-  return larkWebPush?.getStatus?.() || { ok: false, enabled: false, running: false, error: 'lark web push not started' }
+  return larkWebPushStatus()
 })
 
 ipcMain.handle('pet:lark-web-push-open', () => {
-  if (!larkWebPush) startLarkWebPush()
+  setPerformanceModeFromUser('realtime')
   return larkWebPush.showWindow()
 })
 
 ipcMain.handle('pet:lark-web-push-reload', () => {
-  if (!larkWebPush) startLarkWebPush()
+  setPerformanceModeFromUser('realtime')
   return larkWebPush.reload({ show: true })
 })
 
 ipcMain.on('pet:lark-web-push-raw', (_event, data) => {
-  if (!larkWebPush) startLarkWebPush()
-  larkWebPush.handlePush(data)
+  larkWebPush?.handlePush(data)
 })
 
 // Growth state (level/exp/food) persisted in userData. (P4)
@@ -2814,6 +2856,7 @@ ipcMain.on('pet:ui-menu-state', (_e, state) => {
       soundEnabled: state.soundEnabled !== false,
       notificationsEnabled: state.notificationsEnabled !== false,
       taskBubblesVisible: state.taskBubblesVisible !== false,
+      performanceMode: normalizePerformanceMode(state.performanceMode),
     }
     refreshTray()
   }
@@ -3378,6 +3421,7 @@ function startLocalAgentServer() {
           dndMode: Boolean(petUiMenuState.dndMode),
           soundEnabled: petUiMenuState.soundEnabled !== false,
           notificationsEnabled: petUiMenuState.notificationsEnabled !== false,
+          performanceMode: currentPerformanceMode,
         },
         supportedAgentApps: {
           autoHooks: HOOK_AGENTS.map(agent => ({ id: agent.id, label: agent.label })),
@@ -3388,7 +3432,7 @@ function startLocalAgentServer() {
         larkInbox: larkInbox?.getSummary?.() || null,
         larkArchive: larkArchive?.getSummary?.() || null,
         larkBaseSink: larkBaseSink?.getSummary?.() || null,
-        larkWebPush: larkWebPush?.getStatus?.() || null,
+        larkWebPush: larkWebPushStatus(),
         larkAgenda: larkAgenda?.getState?.() || null,
         larkAssistant: {
           resultCount: larkAssistantResults.size,
@@ -3451,7 +3495,7 @@ function startLocalAgentServer() {
       return
     }
     if (req.method === 'GET' && url.pathname === '/pet/lark-web-push') {
-      writeJson(res, 200, larkWebPush?.getStatus?.() || { ok: false, enabled: false, running: false, error: 'lark web push not started' })
+      writeJson(res, 200, larkWebPushStatus())
       return
     }
     if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/pet/lark-web-push-open') {
@@ -3460,7 +3504,7 @@ function startLocalAgentServer() {
         res.end()
         return
       }
-      if (!larkWebPush) startLarkWebPush()
+      setPerformanceModeFromUser('realtime')
       writeJson(res, 200, larkWebPush.showWindow())
       return
     }
@@ -3470,7 +3514,7 @@ function startLocalAgentServer() {
         res.end()
         return
       }
-      if (!larkWebPush) startLarkWebPush()
+      setPerformanceModeFromUser('realtime')
       writeJson(res, 200, larkWebPush.reload({ show: true }))
       return
     }
@@ -3662,6 +3706,16 @@ function refreshTray() {
   items.push({ label: '移动桌宠  ⌘⌥M', click: () => showPetAndEnterMoveMode() })
   items.push({ label: '重置桌宠位置', click: () => showPetAndResetPosition() })
   items.push({ label: '管理 / 设置中心…', click: () => openManageWindow() })
+  const performanceLabels = { balanced: '均衡', realtime: '实时', saver: '省电' }
+  items.push({
+    label: `性能模式：${performanceLabels[currentPerformanceMode]}`,
+    submenu: Object.entries(performanceLabels).map(([mode, label]) => ({
+      label,
+      type: 'radio',
+      checked: currentPerformanceMode === mode,
+      click: () => setPerformanceModeFromUser(mode),
+    })),
+  })
   items.push({
     label: '补齐 Agent Hooks → Kodama',
     click: () => {
@@ -3706,14 +3760,14 @@ function refreshTray() {
   items.push({
     label: '打开飞书实时窗口',
     click: () => {
-      if (!larkWebPush) startLarkWebPush()
+      setPerformanceModeFromUser('realtime')
       larkWebPush.showWindow()
     },
   })
   items.push({
     label: '重载飞书实时窗口',
     click: () => {
-      if (!larkWebPush) startLarkWebPush()
+      setPerformanceModeFromUser('realtime')
       larkWebPush.reload({ show: true })
     },
   })
@@ -3749,7 +3803,7 @@ function refreshTray() {
   }
   const larkToday = stats.lark?.today || 0
   const inboxSummary = larkInbox?.getSummary?.()
-  const webPushSummary = larkWebPush?.getStatus?.()
+  const webPushSummary = larkWebPushStatus()
   items.push(
     { type: 'separator' },
     { label: `飞书群消息：${inboxSummary?.messageCount || 0} 条 / ${inboxSummary?.chatCount || 0} 群`, enabled: false },
@@ -3827,7 +3881,6 @@ app.whenReady().then(() => {
   startLarkArchive()
   startLarkBaseSink()
   startLarkInbox()
-  startLarkWebPush()
   startLarkAgenda()
   startWorkItemStore()
   startAgentTaskBoard()

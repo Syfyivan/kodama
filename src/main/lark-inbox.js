@@ -586,8 +586,22 @@ function createLarkInbox(input = {}) {
     if (started || options.enabled === false) return
     started = true
     refresh({ reason: 'startup' })
+    restartPollingTimer()
+  }
+
+  function restartPollingTimer() {
+    if (timer) clearInterval(timer)
     timer = setInterval(() => refresh({ reason: 'poll' }), options.pollIntervalMs)
     timer.unref?.()
+  }
+
+  function setPollIntervalMs(value) {
+    const next = clampInt(value, 30 * 1000, 30 * 60 * 1000, options.pollIntervalMs)
+    if (next === options.pollIntervalMs) return getSummary()
+    options.pollIntervalMs = next
+    updateSnapshot({ pollIntervalMs: next }, { reason: 'mode', phase: 'configured' })
+    if (started) restartPollingTimer()
+    return getSummary()
   }
 
   function stop() {
@@ -616,7 +630,7 @@ function createLarkInbox(input = {}) {
     }
   }
 
-  return { start, stop, refresh, ingestMessages, getSnapshot, getSummary }
+  return { start, stop, refresh, ingestMessages, setPollIntervalMs, getSnapshot, getSummary }
 }
 
 module.exports = {

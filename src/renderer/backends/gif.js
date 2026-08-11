@@ -150,6 +150,7 @@ export function initGifBackend(cfg = {}) {
   function render(state, { restart = false } = {}) {
     syncFrameAnimationMode()
     const animationState = animationStateFor(state)
+    if (document.body?.dataset) document.body.dataset.petAnimationState = animationState
     const file = fileFor(animationState)
     const source = resolvePetImageSource(base, file, customSource)
     const sameState = img.getAttribute('data-state') === animationState

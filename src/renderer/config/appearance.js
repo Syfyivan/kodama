@@ -72,7 +72,7 @@ export const PET_FAMILIES = [
     frameAnimation: true,
     stages: familyStages(
       ['键帽小窝', '键缝小鼠', '捉虫能手'],
-      ['doze-animated.png', 'young-animated.png', 'winged-animated.png'],
+      ['egg.png', 'young.png', 'winged.png'],
     ),
     map: {
       thinking: 'thinking-animated.png',

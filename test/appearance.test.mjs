@@ -31,11 +31,11 @@ test('each companion family has species-specific evolution names', () => {
   assert.equal(new Set(appearance.PET_FAMILIES.map((family) => family.stages[2].label)).size, appearance.PET_FAMILIES.length)
 })
 
-test('the default keyboard mouse ships every configured growth and reaction image', () => {
+test('the default keyboard mouse rests on static growth art and ships animated reactions', () => {
   const family = appearance.petFamilyById(appearance.DEFAULT_PET_FAMILY_ID)
   assert.equal(family.id, 'aetherling')
   assert.equal(family.frameAnimation, true)
-  assert.ok(family.stages.every(stage => stage.file.endsWith('-animated.png')))
+  assert.deepEqual(family.stages.map(stage => stage.file), ['egg.png', 'young.png', 'winged.png'])
   assert.equal(family.map.thinking, 'thinking-animated.png')
   assert.equal(family.map.working, 'working-animated.png')
   assert.equal(family.map.waiting, 'waiting-animated.png')

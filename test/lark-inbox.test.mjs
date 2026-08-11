@@ -232,3 +232,10 @@ test('lark inbox ingests web push messages into the shared snapshot', () => {
   assert.equal(snapshot.messages[0].source, 'web-push')
   assert.equal(snapshot.messages[0].needsAttention, false)
 })
+
+test('lark inbox can change its polling interval without rebuilding message state', () => {
+  const inbox = createLarkInbox({ enabled: false, pollIntervalMs: 3 * 60 * 1000 })
+  assert.equal(inbox.getSummary().pollIntervalMs, 3 * 60 * 1000)
+  inbox.setPollIntervalMs(10 * 60 * 1000)
+  assert.equal(inbox.getSummary().pollIntervalMs, 10 * 60 * 1000)
+})

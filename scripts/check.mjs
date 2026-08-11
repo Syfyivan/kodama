@@ -42,6 +42,7 @@ const CJS = [
   'src/main/agents/trae.js',
   'src/main/token-usage.js',
   'src/main/pomodoro.js',
+  'src/main/performance-mode.js',
   'src/main/updater.js',
 ]
 const ESM = [

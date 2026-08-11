@@ -31,7 +31,7 @@ function bindSliders() {
 
 // ---- segmented toggles (triggerMode / edgeMode) ----
 function bindSegments() {
-  for (const groupId of ['triggerMode', 'edgeMode']) {
+  for (const groupId of ['triggerMode', 'edgeMode', 'performanceMode']) {
     const group = $(groupId)
     if (!group) continue
     group.addEventListener('click', (e) => {
@@ -190,7 +190,7 @@ function fillUi(ui) {
   setSlider('hitboxScale', pct(ui.hitboxScale), `${pct(ui.hitboxScale)}%`)
   setSlider('bubbleAnchor', Math.round(ui.bubbleAnchor), `${Math.round(ui.bubbleAnchor)}%`)
   setSlider('bubbleGap', Math.round(ui.bubbleGap), `${Math.round(ui.bubbleGap)}px`)
-  for (const groupId of ['triggerMode', 'edgeMode']) {
+  for (const groupId of ['triggerMode', 'edgeMode', 'performanceMode']) {
     const group = $(groupId)
     if (group) [...group.children].forEach((b) => b.classList.toggle('active', b.dataset.v === ui[groupId]))
   }

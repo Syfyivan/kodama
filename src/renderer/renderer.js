@@ -21,6 +21,7 @@ import {
 } from './config/appearance.js'
 import {
   clampPetScale,
+  normalizePerformanceMode,
   UI_SETTINGS_VERSION,
   uiSettingsSourceForVersion,
 } from './config/ui-settings.js'
@@ -138,6 +139,7 @@ const settingPetOpacityValue = document.getElementById('setting-pet-opacity-valu
 const settingHitboxScale = document.getElementById('setting-hitbox-scale')
 const settingHitboxScaleValue = document.getElementById('setting-hitbox-scale-value')
 const settingTriggerMode = document.getElementById('setting-trigger-mode')
+const settingPerformanceMode = document.getElementById('setting-performance-mode')
 const settingTerminalLauncher = document.getElementById('setting-terminal-launcher')
 const settingEdgeMode = document.getElementById('setting-edge-mode')
 const settingPettingEnabled = document.getElementById('setting-petting-enabled')
@@ -289,6 +291,7 @@ const DEFAULT_UI_SETTINGS = {
   petX: null, // pet position inside the full-workarea overlay (null = auto bottom-right)
   petY: null,
   ttsEnabled: false, // speak important events via macOS `say`
+  performanceMode: 'balanced',
 }
 let uiSettings = loadUiSettings()
 let pomodoroSettings = {
@@ -345,6 +348,7 @@ function normalizeUiSettings(source = {}) {
     petX: Number.isFinite(source.petX) ? source.petX : null,
     petY: Number.isFinite(source.petY) ? source.petY : null,
     ttsEnabled: source.ttsEnabled === true,
+    performanceMode: normalizePerformanceMode(source.performanceMode),
   }
 }
 
@@ -376,6 +380,7 @@ function scheduleSavePetPos() {
 function applyUiSettings() {
   document.documentElement.style.setProperty('--pet-scale', String(uiSettings.petScale))
   document.documentElement.style.setProperty('--pet-opacity', String(uiSettings.petOpacity))
+  document.body.dataset.performanceMode = uiSettings.performanceMode
   backend?.applySettings?.()
   syncAccessories()
   window.pet.updateUiMenuState?.({
@@ -383,6 +388,7 @@ function applyUiSettings() {
     soundEnabled: uiSettings.soundEnabled,
     notificationsEnabled: uiSettings.notificationsEnabled,
     taskBubblesVisible: uiSettings.taskBubblesVisible,
+    performanceMode: uiSettings.performanceMode,
   })
   positionBubble()
   positionPanel()
@@ -543,7 +549,10 @@ async function init() {
     // then keep the cache fresh from main's push (display/window changes).
     window.pet.displayAreas?.().then(applyDisplayAreaSnapshot).catch(() => {})
     window.pet.onDisplayAreasChanged?.(applyDisplayAreaSnapshot)
-    accessoryLayer = initAccessoryLayer(() => backend?.getBounds?.(), { accessories: activeAccessories })
+    accessoryLayer = initAccessoryLayer(() => backend?.getBounds?.(), {
+      accessories: activeAccessories,
+      continuousTracking: renderConfig.backend !== 'gif',
+    })
     applyUiSettings()
     loadPomodoroSettings()
     // One pet, two sources — both flow through the same handler (reaction + growth).
@@ -1231,6 +1240,7 @@ function gifLayout() {
   img.style.top = `${py}px`
   uiSettings.petX = px
   uiSettings.petY = py
+  accessoryLayer?.refresh?.()
   positionBubble()
   positionPanel()
 }
@@ -2784,6 +2794,19 @@ function setupEventPanel() {
     saveUiSettings()
     applyUiSettings()
   })
+  settingPerformanceMode?.addEventListener('click', (e) => {
+    const button = e.target.closest?.('[data-performance-mode]')
+    if (!button) return
+    uiSettings.performanceMode = normalizePerformanceMode(button.dataset.performanceMode)
+    saveUiSettings()
+    applyUiSettings()
+    const label = uiSettings.performanceMode === 'realtime'
+      ? '实时模式'
+      : uiSettings.performanceMode === 'saver'
+        ? '省电模式'
+        : '均衡模式'
+    say(`已切换到${label}`, 1800)
+  })
   settingTerminalLauncher?.addEventListener('click', (e) => {
     const button = e.target.closest?.('[data-terminal-launcher]')
     if (!button) return
@@ -3304,6 +3327,11 @@ function syncSettingControls() {
   if (settingTriggerMode) {
     settingTriggerMode.querySelectorAll('[data-trigger-mode]').forEach((button) => {
       button.classList.toggle('active', button.dataset.triggerMode === uiSettings.triggerMode)
+    })
+  }
+  if (settingPerformanceMode) {
+    settingPerformanceMode.querySelectorAll('[data-performance-mode]').forEach((button) => {
+      button.classList.toggle('active', button.dataset.performanceMode === uiSettings.performanceMode)
     })
   }
   if (settingTerminalLauncher) {

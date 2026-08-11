@@ -191,6 +191,15 @@ body.move-mode #pet-gif {
   animation-play-state: paused;
 }
 
+body[data-pet-animation-state="idle"] .spirit-aura,
+body[data-pet-animation-state="idle"] .spirit-wing,
+body[data-pet-animation-state="idle"] .spirit-spark,
+body[data-performance-mode="saver"] .spirit-aura,
+body[data-performance-mode="saver"] .spirit-wing,
+body[data-performance-mode="saver"] .spirit-spark {
+  animation-play-state: paused !important;
+}
+
 /* Keep legacy static-pack motion proportional even at the compact 12% size. */
 @keyframes kodama-idle {
   0%, 100% { translate: 0 0; scale: 1; }

@@ -5,6 +5,7 @@ import {
   PET_SCALE_MIN,
   UI_SETTINGS_VERSION,
   clampPetScale,
+  normalizePerformanceMode,
   uiSettingsSourceForVersion,
 } from '../src/renderer/config/ui-settings.js'
 
@@ -29,11 +30,25 @@ test('version 4 migrates opacity and remaps its old wide size range', () => {
   assert.equal('taskBubbleOpacity' in migrated, false)
 })
 
-test('version 5 default size becomes the quieter version 6 default-equivalent size', () => {
+test('version 5 default size becomes the quieter current default-equivalent size', () => {
   const migrated = uiSettingsSourceForVersion({ version: 5, petScale: 0.72, petOpacity: 0.82 })
   assert.equal(migrated.version, UI_SETTINGS_VERSION)
   assert.equal(migrated.petScale, 0.432)
   assert.equal(migrated.petOpacity, 0.82)
+})
+
+test('version 6 installs migrate to balanced mode without losing their chosen size', () => {
+  const migrated = uiSettingsSourceForVersion({ version: 6, petScale: 0.258, petOpacity: 0.82 })
+  assert.equal(migrated.version, UI_SETTINGS_VERSION)
+  assert.equal(migrated.petScale, 0.258)
+  assert.equal(migrated.petOpacity, 0.82)
+  assert.equal(migrated.performanceMode, 'balanced')
+})
+
+test('performance mode rejects unknown persisted values', () => {
+  assert.equal(normalizePerformanceMode('realtime'), 'realtime')
+  assert.equal(normalizePerformanceMode('saver'), 'saver')
+  assert.equal(normalizePerformanceMode('unexpected'), 'balanced')
 })
 
 test('version 3 users parked at the old minimum migrate to the new minimum', () => {
