@@ -96,12 +96,28 @@ test('hidden task bubbles switch the pet into an independent dialogue and motion
   assert.match(renderer, /backend\?\.playMotion\?\.\(moment\.motion, 'normal'\)/)
   assert.match(renderer, /showPetDialogue\(moment\.text\)/)
   assert.match(petCss, /#pet-dialogue\s*\{[\s\S]*?opacity:\s*var\(--pet-opacity\)/)
-  assert.match(petCss, /body\[data-companion-active="true"\] #pet-gif\[data-state="idle"\]/)
+  assert.doesNotMatch(petCss, /body\[data-companion-active="true"\] #pet-gif\[data-state="idle"\]/)
   assert.match(petCss, /#pet-gif\[data-frame-animation="true"\][^{]*\{[^}]*animation:\s*none\s*!important/)
+  assert.match(petCss, /#pet-gif\[data-state="idle"\]\s*\{[^}]*animation:\s*none/)
+  for (const state of ['working', 'thinking', 'looking', 'replying', 'waiting']) {
+    const block = petCss.match(new RegExp(`#pet-gif\\[data-state="${state}"\\]\\s*\\{([^}]*)\\}`))
+    assert.ok(block, `missing ${state} animation rule`)
+    assert.doesNotMatch(block[1], /infinite/, `${state} must settle instead of looping forever`)
+  }
   for (const action of ['thinking', 'eating', 'blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod']) {
     assert.match(petCss, new RegExp(`#pet-gif\\[data-state="${action}"\\]`))
     assert.match(petCss, new RegExp(`@keyframes kodama-${action}`))
   }
+})
+
+test('resting companions use low-frequency family-specific micro gestures', () => {
+  assert.match(renderer, /idleMotionAt\(selectedPetFamilyId, idleMotionIndex\)/)
+  assert.match(renderer, /canPlayIdleMotion\(\{/)
+  assert.match(renderer, /backend\?\.getState\?\.\(\)/)
+  assert.match(renderer, /backend\?\.getOngoingState\?\.\(\)/)
+  assert.match(renderer, /backend\?\.playIdleMotion\?\.\(\)/)
+  assert.match(renderer, /if \(!playedFrameAnimation\) backend\?\.playMotion\?\.\(motion, 'normal'\)/)
+  assert.match(renderer, /scheduleIdleMotion\(idleMotionInitialDelayMs\(\)\)/)
 })
 
 test('every size control uses the compact 12% to 75% range and 42% default', () => {

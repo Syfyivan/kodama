@@ -10,7 +10,7 @@ const port = 7766
 const host = '127.0.0.1'
 const action = process.argv[2] || 'show'
 const tokenTestAmount = Number(process.argv[3] || 1234)
-const allowed = new Set(['show', 'hide', 'toggle', 'panel', 'reset-position', 'bridge-tasks', 'lark-workbench', 'healthz', 'tokens', 'token-test'])
+const allowed = new Set(['show', 'hide', 'toggle', 'panel', 'reset-position', 'bridge-tasks', 'lark-workbench', 'startup-on', 'startup-off', 'healthz', 'tokens', 'token-test'])
 
 function request(path, method = 'POST', body = null) {
   return new Promise((resolveRequest, reject) => {
@@ -102,12 +102,12 @@ async function main() {
     console.log(JSON.stringify(result))
     return
   } catch (err) {
-    if (!['show', 'panel', 'reset-position', 'bridge-tasks', 'lark-workbench', 'tokens', 'token-test'].includes(action)) throw err
+    if (!['show', 'panel', 'reset-position', 'bridge-tasks', 'lark-workbench', 'startup-on', 'startup-off', 'tokens', 'token-test'].includes(action)) throw err
   }
 
   await launchDetached()
   await waitForServer()
-  const result = action === 'panel' || action === 'reset-position' || action === 'bridge-tasks' || action === 'lark-workbench'
+  const result = action === 'panel' || action === 'reset-position' || action === 'bridge-tasks' || action === 'lark-workbench' || action === 'startup-on' || action === 'startup-off'
     ? await request(`/pet/${action}`)
     : action === 'tokens'
       ? await request('/pet/token-stats', 'GET')

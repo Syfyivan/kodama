@@ -9,7 +9,7 @@
 // cfg: {
 //   set,
 //   map: { idle, thinking, looking, working, replying, waiting, eating, done, failed, tap },
-//   stages: [{ file, minLevel }]  // optional level-based evolution
+//   stages: [{ file, idleFile, minLevel }]  // optional level-based evolution
 // }
 // When `stages` is set, the growth level picks the idle sprite. A configured
 // per-status file can temporarily override it, then the backend returns to the
@@ -32,6 +32,7 @@ const ANIMATION_STATES = new Set([
   'wave',
   'doze',
   'nod',
+  'micro',
 ])
 const TRANSIENT = new Set(['done', 'failed', 'tap', 'eating'])
 const TERMINAL_REACTIONS = new Set(['done', 'failed'])
@@ -89,6 +90,10 @@ export function pickStageFile(stages, level) {
   return chosen || lowest || ''
 }
 
+function idleFileForStage(stages, stageFile) {
+  return stages.find(stage => stage?.file === stageFile)?.idleFile || ''
+}
+
 export function pickStateFile(map, stageFile, state) {
   if (state !== 'idle' && map?.[state]) return map[state]
   return stageFile || map?.[state] || map?.idle || 'idle.gif'
@@ -105,6 +110,7 @@ export function initGifBackend(cfg = {}) {
   let frameAnimation = cfg.frameAnimation === true
   let currentLevel = 1
   let stageFile = stages.length ? pickStageFile(stages, 1) : ''
+  let stageIdleFile = idleFileForStage(stages, stageFile)
   let customSource = ''
   const img = document.createElement('img')
   img.id = 'pet-gif'
@@ -124,11 +130,18 @@ export function initGifBackend(cfg = {}) {
   let ongoing = 'idle' // the looping baseline state to revert to
   let revertTimer
 
-  const syncFrameAnimationMode = () => {
-    img.setAttribute('data-frame-animation', String(frameAnimation && !customSource))
+  const syncFrameAnimationMode = (file = img.getAttribute('data-file') || '') => {
+    // APNGs own their internal eye, ear, paw, leaf or prop movement. Suppress
+    // whole-image CSS for any animated file, regardless of the family pack.
+    const fileAnimatesInternally = /(?:^|[-_.])animated(?:[-_.]|$)/i.test(String(file || ''))
+    img.setAttribute('data-frame-animation', String(!customSource && fileAnimatesInternally))
   }
 
-  const fileFor = (state) => pickStateFile(map, stageFile, state)
+  const fileFor = (state) => (
+    state === 'micro' && stageIdleFile
+      ? stageIdleFile
+      : pickStateFile(map, stageFile, state)
+  )
 
   // Compare the resolved file (not the state) so a stage swap re-renders even when
   // the status is unchanged.
@@ -148,10 +161,10 @@ export function initGifBackend(cfg = {}) {
   }
 
   function render(state, { restart = false } = {}) {
-    syncFrameAnimationMode()
     const animationState = animationStateFor(state)
     if (document.body?.dataset) document.body.dataset.petAnimationState = animationState
     const file = fileFor(animationState)
+    syncFrameAnimationMode(file)
     const source = resolvePetImageSource(base, file, customSource)
     const sameState = img.getAttribute('data-state') === animationState
     if (img.getAttribute('data-source') === source) {
@@ -185,6 +198,19 @@ export function initGifBackend(cfg = {}) {
       const r = img.getBoundingClientRect()
       return { x: r.x, y: r.y, width: r.width, height: r.height }
     },
+    getState() {
+      return img.getAttribute('data-state') || ongoing
+    },
+    getOngoingState() {
+      return ongoing
+    },
+    // Load the current growth stage's short APNG only for this one gesture.
+    // Returning false lets legacy/custom packs keep the CSS motion fallback.
+    playIdleMotion() {
+      if (!stageIdleFile || customSource) return false
+      show('micro', true)
+      return true
+    },
     // Logical motions are transient overlays on the current task status. The
     // CSS backend supplies a richer vocabulary for static pet art, while an
     // unknown Live2D-style motion remains a safe no-op here.
@@ -205,6 +231,7 @@ export function initGifBackend(cfg = {}) {
       currentLevel = Math.max(1, Number(level) || 1)
       if (!stages.length) return
       const next = pickStageFile(stages, currentLevel)
+      stageIdleFile = idleFileForStage(stages, next)
       if (next && next !== stageFile) {
         stageFile = next
         render(img.getAttribute('data-state') || ongoing)
@@ -216,6 +243,7 @@ export function initGifBackend(cfg = {}) {
       stages = Array.isArray(pack.stages) ? pack.stages : []
       frameAnimation = pack.frameAnimation === true
       stageFile = stages.length ? pickStageFile(stages, currentLevel) : ''
+      stageIdleFile = idleFileForStage(stages, stageFile)
       render(img.getAttribute('data-state') || ongoing)
     },
     setCustomSource(source) {

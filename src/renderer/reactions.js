@@ -99,7 +99,7 @@ export function reactToEvent(event, hooks, options = {}) {
     text: eventText,
   })
 
-  if (def.motion) hooks.playMotion?.(def.motion)
+  if (def.motion && options.motions !== false) hooks.playMotion?.(def.motion)
   hooks.onStatus?.(def.status)
   if (text) {
     hooks.say?.(text, def.ms || 4000, event)

@@ -73,12 +73,76 @@ test('status art overrides the growth pose while idle keeps the current stage', 
 test('animation states preserve known reactions and safely fall back to idle', () => {
   for (const state of [
     'idle', 'thinking', 'working', 'looking', 'replying', 'waiting', 'eating', 'done', 'failed', 'tap',
-    'blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod',
+    'blink', 'hop', 'stretch', 'sway', 'wave', 'doze', 'nod', 'micro',
   ]) {
     assert.equal(animationStateFor(state), state)
   }
   assert.equal(animationStateFor('unknown-status'), 'idle')
   assert.equal(animationStateFor(null), 'idle')
+})
+
+test('a resting companion plays the selected growth stage APNG and returns to its baseline', async () => {
+  const attributes = new Map()
+  const img = {
+    style: { removeProperty() {} },
+    addEventListener() {},
+    getAttribute: (key) => attributes.get(key) || '',
+    setAttribute: (key, value) => attributes.set(key, String(value)),
+  }
+  const previousDocument = globalThis.document
+  globalThis.document = {
+    createElement: () => img,
+    getElementById: () => null,
+    body: { appendChild() {}, dataset: {} },
+  }
+  try {
+    const backend = initGifBackend({
+      set: 'aetherling',
+      stages: [
+        { file: 'egg.png', idleFile: 'egg-idle-animated.png', minLevel: 1 },
+        { file: 'young.png', idleFile: 'young-idle-animated.png', minLevel: 5 },
+      ],
+    })
+    backend.setLevel(8)
+    assert.equal(img.src, './pets/aetherling/young.png')
+    assert.equal(backend.playIdleMotion(), true)
+    assert.equal(img.src, './pets/aetherling/young-idle-animated.png')
+    assert.equal(img.getAttribute('data-state'), 'micro')
+    assert.equal(img.getAttribute('data-frame-animation'), 'true')
+    assert.equal(backend.getOngoingState(), 'idle')
+
+    await new Promise(resolve => setTimeout(resolve, 2700))
+    assert.equal(img.src, './pets/aetherling/young.png')
+    assert.equal(img.getAttribute('data-state'), 'idle')
+  } finally {
+    globalThis.document = previousDocument
+  }
+})
+
+test('stage micro gestures are optional so custom and legacy packs can fall back safely', () => {
+  const attributes = new Map()
+  const img = {
+    style: { removeProperty() {} },
+    addEventListener() {},
+    getAttribute: (key) => attributes.get(key) || '',
+    setAttribute: (key, value) => attributes.set(key, String(value)),
+  }
+  const previousDocument = globalThis.document
+  globalThis.document = {
+    createElement: () => img,
+    getElementById: () => null,
+    body: { appendChild() {}, dataset: {} },
+  }
+  try {
+    const backend = initGifBackend({
+      set: 'custom',
+      stages: [{ file: 'young.png', minLevel: 1 }],
+    })
+    assert.equal(backend.playIdleMotion(), false)
+    assert.equal(img.src, './pets/custom/young.png')
+  } finally {
+    globalThis.document = previousDocument
+  }
 })
 
 test('companion motion names map to distinct transient sprite actions', () => {
@@ -121,16 +185,27 @@ test('switching a running GIF backend updates the image source immediately', () 
     body: { appendChild() {} },
   }
   try {
-    const backend = initGifBackend({ set: 'aetherling', map: { idle: 'egg.png' }, frameAnimation: true })
+    const backend = initGifBackend({
+      set: 'aetherling',
+      stages: [{ file: 'egg.png', minLevel: 1 }],
+      map: { waiting: 'waiting-animated.png' },
+      frameAnimation: true,
+    })
     assert.equal(img.style.objectFit, 'contain', 'non-square custom images must keep their aspect ratio')
     assert.equal(img.src, './pets/aetherling/egg.png')
-    assert.equal(img.getAttribute('data-frame-animation'), 'true')
+    assert.equal(img.getAttribute('data-frame-animation'), 'false', 'static growth art keeps CSS micro gestures available')
+    backend.setStatus('waiting')
+    assert.equal(img.src, './pets/aetherling/waiting-animated.png')
+    assert.equal(img.getAttribute('data-frame-animation'), 'true', 'APNG reaction art must not receive a second whole-image animation')
     backend.setCustomSource('file:///Users/me/Kodama/custom.gif')
     assert.equal(img.src, 'file:///Users/me/Kodama/custom.gif')
     assert.equal(img.getAttribute('data-frame-animation'), 'false')
     backend.setCustomSource('')
-    assert.equal(img.src, './pets/aetherling/egg.png')
+    assert.equal(img.src, './pets/aetherling/waiting-animated.png')
     assert.equal(img.getAttribute('data-frame-animation'), 'true')
+    backend.setStatus('idle')
+    assert.equal(img.src, './pets/aetherling/egg.png')
+    assert.equal(img.getAttribute('data-frame-animation'), 'false')
   } finally {
     globalThis.document = previousDocument
   }

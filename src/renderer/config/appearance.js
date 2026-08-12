@@ -1,5 +1,5 @@
-// Built-in appearance choices. The default mouse uses APNG frame animation;
-// other families and custom uploads keep the existing static/CSS behavior.
+// Built-in appearance choices. Every family keeps a static growth pose in
+// memory and loads a short, single-play APNG only when its idle gesture runs.
 export const PET_SKINS = [
   {
     id: 'forest',
@@ -52,11 +52,49 @@ export const GROWTH_STAGES = [
 ]
 
 function familyStages(labels = [], files = []) {
-  return GROWTH_STAGES.map(({ file, minLevel, label }, index) => ({
-    file: files[index] || file,
-    minLevel,
-    label: labels[index] || label,
-  }))
+  return GROWTH_STAGES.map(({ file, minLevel, label }, index) => {
+    const resolvedFile = files[index] || file
+    return {
+      file: resolvedFile,
+      idleFile: resolvedFile.replace(/\.png$/i, '-idle-animated.png'),
+      minLevel,
+      label: labels[index] || label,
+    }
+  })
+}
+
+function lightweightPoseMap() {
+  return {
+    thinking: 'working.png',
+    looking: 'winged.png',
+    working: 'working.png',
+    replying: 'working.png',
+    waiting: 'winged.png',
+    eating: 'working.png',
+    done: 'winged.png',
+    failed: 'doze.png',
+    tap: 'winged.png',
+    hop: 'winged.png',
+    wave: 'winged.png',
+    doze: 'doze.png',
+  }
+}
+
+function expressivePoseMap() {
+  return {
+    thinking: 'working.png',
+    looking: 'waiting.png',
+    working: 'working.png',
+    replying: 'working.png',
+    waiting: 'waiting.png',
+    eating: 'done.png',
+    done: 'done.png',
+    failed: 'failed.png',
+    tap: 'done.png',
+    hop: 'done.png',
+    wave: 'done.png',
+    doze: 'doze.png',
+  }
 }
 
 export const PET_FAMILIES = [
@@ -90,37 +128,88 @@ export const PET_FAMILIES = [
     },
   },
   {
-    id: 'cloudfox',
-    set: 'cloudfox',
-    label: '云朵狐',
-    shortLabel: '云狐',
-    symbol: '☁',
-    description: '尾巴像软绵绵云朵的天空小狐',
-    palette: ['#9fd8ff', '#fff4fb'],
+    id: 'cottonpod-hermit',
+    set: 'cottonpod-hermit',
+    label: '棉桃寄居蟹',
+    shortLabel: '棉桃蟹',
+    symbol: '❀',
+    description: '把柔软棉桃当成小屋、情绪写在小脸上的寄居蟹',
+    palette: ['#fff3d9', '#ffc8b2'],
     preview: 'young.png',
-    stages: familyStages(['云纹狐蛋', '软云幼狐', '天穹翼狐']),
+    stages: familyStages(['棉壳小窝', '棉桃幼蟹', '棉团巡游蟹']),
+    map: expressivePoseMap(),
   },
   {
-    id: 'moonbunny',
-    set: 'moonbunny',
-    label: '月光兔',
-    shortLabel: '月兔',
-    symbol: '☾',
-    description: '安静陪伴深夜工作的月亮兔子',
-    palette: ['#a9a8ff', '#f3e9ff'],
-    preview: 'young.png',
-    stages: familyStages(['月眠之卵', '月光幼兔', '星纱翼兔']),
-  },
-  {
-    id: 'mossdragon',
-    set: 'mossdragon',
-    label: '苔苔龙',
-    shortLabel: '苔龙',
+    id: 'ferncurl-pangolin',
+    set: 'ferncurl-pangolin',
+    label: '蕨卷甲',
+    shortLabel: '卷卷甲',
     symbol: '❧',
-    description: '头顶会发芽的森林迷你龙',
-    palette: ['#86d6a0', '#e7f5bd'],
+    description: '背着一身卷曲蕨叶的小小穿山甲',
+    palette: ['#21ae74', '#f2d83f'],
     preview: 'young.png',
-    stages: familyStages(['苔纹龙蛋', '芽芽幼龙', '森翼苔龙']),
+    stages: familyStages(['蕨苞小卷', '蕨甲幼崽', '蕨冠卷甲']),
+    map: expressivePoseMap(),
+  },
+  {
+    id: 'rainpouch-newt',
+    set: 'rainpouch-newt',
+    label: '雨囊鲵',
+    shortLabel: '雨囊鲵',
+    symbol: '◌',
+    description: '背着小雨囊、会认真照顾每一滴水的幼鲵',
+    palette: ['#85b9ff', '#ffc0cf'],
+    preview: 'young.png',
+    stages: familyStages(['叶被小眠', '雨囊幼鲵', '晴雨守囊鲵']),
+    map: expressivePoseMap(),
+  },
+  {
+    id: 'little-undo',
+    set: 'little-undo',
+    label: '小撤',
+    shortLabel: '小撤',
+    symbol: '↶',
+    description: '把失误轻轻卷回来、重新摆好的纸带小精灵',
+    palette: ['#b9d8f6', '#f7e2a2'],
+    preview: 'young.png',
+    stages: familyStages(['键帽小撤', '回卷幼撤', '双环小撤']),
+    map: lightweightPoseMap(),
+  },
+  {
+    id: 'pocket-glider',
+    set: 'pocket-glider',
+    label: '兜兜鼯鼠',
+    shortLabel: '兜兜',
+    symbol: '⌒',
+    description: '一直保持幼小体型、在核桃兜里收集果实的小鼯鼠',
+    palette: ['#b7bd78', '#ead09a'],
+    preview: 'young.png',
+    stages: familyStages(['核桃小兜', '抱叶幼鼯', '藏果兜鼯']),
+    map: lightweightPoseMap(),
+  },
+  {
+    id: 'nuonuo-seal',
+    set: 'nuonuo-seal',
+    label: '糯糯海豹',
+    shortLabel: '糯糯',
+    symbol: '◡',
+    description: '像一颗暖呼呼糯米团的圆润小海豹',
+    palette: ['#fff7ed', '#f7c8aa'],
+    preview: 'young.png',
+    stages: familyStages(['糯团小眠', '糯糯幼豹', '海苔糯豹']),
+    map: lightweightPoseMap(),
+  },
+  {
+    id: 'upside-sprout',
+    set: 'upside-sprout',
+    label: '倒长芽',
+    shortLabel: '倒长芽',
+    symbol: '¿',
+    description: '根会向上长、偶尔倒过来认真想问题的浅粉小芽',
+    palette: ['#efd9dd', '#dce7c4'],
+    preview: 'young.png',
+    stages: familyStages(['眠籽小芽', '倒长幼芽', '问号长芽']),
+    map: lightweightPoseMap(),
   },
 ]
 

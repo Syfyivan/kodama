@@ -32,6 +32,12 @@ import {
   isActiveCompanionMode,
 } from './companion-mode.js'
 import {
+  canPlayIdleMotion,
+  idleMotionAt,
+  idleMotionDelayMs,
+  idleMotionInitialDelayMs,
+} from './idle-motions.js'
+import {
   appearanceState,
   configureAccessories,
   equipAccessory,
@@ -304,9 +310,11 @@ let pomodoroSettings = {
 let activeHoverBubbleId = ''
 let wanderTimer = null
 let companionTimer = null
+let idleMotionTimer = null
 let petDialogueTimer = null
 let companionModeActive = null
 let companionMomentIndex = 0
+let idleMotionIndex = 0
 let floatingLayoutFrame = 0
 let moveModeUntil = 0
 let moveModeTimer = 0
@@ -394,6 +402,7 @@ function applyUiSettings() {
   positionPanel()
   configureWander()
   configureCompanionMode()
+  configureIdleMotion()
   syncSettingControls()
   window.pet.reportUiSettings?.(uiSettings) // keep the management window in sync
 }
@@ -483,6 +492,7 @@ async function init() {
     const local = await importLocal('./config/render.local.js')
 
     const selectedFamily = petFamilyById(selectedPetFamilyId)
+    document.body.dataset.petFamily = selectedFamily.id
     const localRender = local?.RENDER
     const localUsesBuiltInFamily = localRender?.backend === 'gif' && PET_FAMILIES.some((family) => family.set === localRender.gif?.set)
     builtInFamilySelectionEnabled = !localRender || localUsesBuiltInFamily
@@ -603,6 +613,10 @@ async function init() {
           reactToEvent(event, hooks, {
             sound: uiSettings.soundEnabled,
             notifications: uiSettings.notificationsEnabled,
+            // Sprite packs already express the event through their status art.
+            // Playing a second motion first makes one event look like two rapid
+            // animation switches; Live2D still needs its explicit motion group.
+            motions: renderConfig.backend !== 'gif',
           })
           speakEvent(event) // optional macOS TTS for important events
         }
@@ -764,7 +778,7 @@ function renderAppearancePanel() {
   petFamilyOptions.innerHTML = PET_FAMILIES.map((family) => [
     `<button type="button" data-pet-family-id="${escapeHtml(family.id)}" class="pet-family-choice${selectedPetFamilyId === family.id ? ' active' : ''}" aria-pressed="${selectedPetFamilyId === family.id}" ${builtInFamilySelectionEnabled ? '' : 'disabled'} title="${escapeHtml(family.description)}">`,
     `<span class="pet-family-preview" style="--family-a:${escapeHtml(family.palette[0])};--family-b:${escapeHtml(family.palette[1])}"><img src="./pets/${escapeHtml(family.set)}/${escapeHtml(family.preview)}" alt="" /></span>`,
-    `<strong>${escapeHtml(family.shortLabel)}</strong><small>${escapeHtml(family.symbol)} 从蛋开始</small></button>`,
+    `<strong>${escapeHtml(family.shortLabel)}</strong><small>${escapeHtml(family.symbol)} 保留成长</small></button>`,
   ].join('')).join('')
 
   if (customStyleUpload) {
@@ -954,16 +968,6 @@ async function chooseAppearance(target) {
     }
     const family = petFamilyById(familyButton.dataset.petFamilyId)
     const isNewFamily = family.id !== selectedPetFamilyId
-    const currentGrowth = getGrowthState()
-    const hasGrowth = currentGrowth.level > 1 || currentGrowth.exp > 0 || currentGrowth.food > 0 || currentGrowth.totalFed > 0
-    if (isNewFamily && hasGrowth) {
-      const accepted = await requestAppearanceConfirm({
-        title: `领养 ${family.label}？`,
-        copy: '新伙伴会从一颗蛋开始，并清空当前等级、经验、食物和已解锁装扮。',
-        confirmLabel: `领养 ${family.shortLabel}`,
-      })
-      if (!accepted) return
-    }
     if (customStyleState.activeId) {
       const customResult = await window.pet.activateCustomStyle?.('')
       if (!customResult?.ok) {
@@ -972,8 +976,8 @@ async function chooseAppearance(target) {
       }
       applyCustomStyleSnapshot(customResult.snapshot)
     }
-    if (isNewFamily) resetGrowthFromCurrentTokens()
     selectedPetFamilyId = family.id
+    document.body.dataset.petFamily = family.id
     localStorage.setItem('kodama-pet-family', family.id)
     activeGifConfig = {
       ...DEFAULT_PET_RENDER.gif,
@@ -983,8 +987,9 @@ async function chooseAppearance(target) {
       frameAnimation: family.frameAnimation === true,
     }
     backend?.setPetPack?.(activeGifConfig)
+    configureIdleMotion({ restart: true })
     syncAccessories()
-    say(isNewFamily ? `🥚 领养了 ${family.label}，从蛋开始陪你成长` : `已换回 ${family.label}`, 2800)
+    say(isNewFamily ? `已换成 ${family.label}，成长进度保留` : `正在使用 ${family.label}`, 2800)
     return
   }
   const uploadButton = target.closest?.('#custom-style-upload')
@@ -1661,7 +1666,7 @@ function playCompanionMoment() {
   companionTimer = null
   if (!companionModeActive) return
   if (document.hidden || panelVisible || isMoveModeActive() || !bubble.classList.contains('hidden')) {
-    scheduleCompanionMoment(8000)
+    scheduleCompanionMoment(30_000)
     return
   }
   const moment = companionMomentAt(companionMomentIndex)
@@ -1689,6 +1694,49 @@ function configureCompanionMode() {
   if (companionTimer) clearTimeout(companionTimer)
   hidePetDialogue()
   scheduleCompanionMoment(changed ? companionInitialDelayMs() : companionDelayMs())
+}
+
+function scheduleIdleMotion(delay = idleMotionDelayMs()) {
+  if (idleMotionTimer) clearTimeout(idleMotionTimer)
+  if (uiSettings.dndMode || uiSettings.performanceMode === 'saver') {
+    idleMotionTimer = null
+    return
+  }
+  idleMotionTimer = setTimeout(playIdleMotion, delay)
+}
+
+function playIdleMotion() {
+  idleMotionTimer = null
+  const currentState = backend?.getState?.() || ''
+  const ongoingState = backend?.getOngoingState?.() || currentState
+  if (canPlayIdleMotion({
+    documentHidden: document.hidden,
+    panelVisible,
+    moveModeActive: isMoveModeActive(),
+    dndMode: uiSettings.dndMode,
+    performanceMode: uiSettings.performanceMode,
+    currentState,
+    ongoingState,
+  })) {
+    const motion = idleMotionAt(selectedPetFamilyId, idleMotionIndex)
+    idleMotionIndex += 1
+    const playedFrameAnimation = backend?.playIdleMotion?.() === true
+    if (!playedFrameAnimation) backend?.playMotion?.(motion, 'normal')
+  }
+  scheduleIdleMotion()
+}
+
+function configureIdleMotion({ restart = false } = {}) {
+  const enabled = !uiSettings.dndMode && uiSettings.performanceMode !== 'saver'
+  if (!enabled) {
+    if (idleMotionTimer) clearTimeout(idleMotionTimer)
+    idleMotionTimer = null
+    return
+  }
+  if (!restart && idleMotionTimer) return
+  if (idleMotionTimer) clearTimeout(idleMotionTimer)
+  if (restart) idleMotionIndex = 0
+  scheduleIdleMotion(idleMotionInitialDelayMs())
 }
 
 let tokenStats = { today: 0, last7: 0, total: 0, local: {}, lark: {} }

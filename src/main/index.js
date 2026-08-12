@@ -3382,6 +3382,10 @@ function controlPet(action) {
     createLarkWorkbenchWindow()
   } else if (action === 'manage') {
     openManageWindow()
+  } else if (action === 'startup-on') {
+    setLoginItemEnabled(true)
+  } else if (action === 'startup-off') {
+    setLoginItemEnabled(false)
   } else {
     return { ok: false, error: 'unknown-control-action' }
   }
@@ -3390,6 +3394,7 @@ function controlPet(action) {
     action,
     petHidden,
     windowReady: Boolean(win && !win.isDestroyed()),
+    loginItemEnabled: isLoginItemEnabled(),
   }
 }
 
@@ -3518,7 +3523,7 @@ function startLocalAgentServer() {
       writeJson(res, 200, larkWebPush.reload({ show: true }))
       return
     }
-    const controlMatch = url.pathname.match(/^\/pet\/(show|hide|toggle|panel|reset-position|bridge-tasks|lark-workbench|manage)$/)
+    const controlMatch = url.pathname.match(/^\/pet\/(show|hide|toggle|panel|reset-position|bridge-tasks|lark-workbench|manage|startup-on|startup-off)$/)
     if (controlMatch && (req.method === 'GET' || req.method === 'POST')) {
       if (isCrossSiteBrowserRequest(req)) {
         res.writeHead(403)

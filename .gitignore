@@ -22,6 +22,21 @@ src/renderer/pets/*
 !src/renderer/pets/aetherling/
 !src/renderer/pets/aetherling/**
 # Built-in generated companion families — project-owned and safe to ship.
+!src/renderer/pets/cottonpod-hermit/
+!src/renderer/pets/cottonpod-hermit/**
+!src/renderer/pets/ferncurl-pangolin/
+!src/renderer/pets/ferncurl-pangolin/**
+!src/renderer/pets/rainpouch-newt/
+!src/renderer/pets/rainpouch-newt/**
+!src/renderer/pets/little-undo/
+!src/renderer/pets/little-undo/**
+!src/renderer/pets/pocket-glider/
+!src/renderer/pets/pocket-glider/**
+!src/renderer/pets/nuonuo-seal/
+!src/renderer/pets/nuonuo-seal/**
+!src/renderer/pets/upside-sprout/
+!src/renderer/pets/upside-sprout/**
+# Retained legacy companion families.
 !src/renderer/pets/cloudfox/
 !src/renderer/pets/cloudfox/**
 !src/renderer/pets/moonbunny/

@@ -22,6 +22,18 @@ test('lark task_done renders a 💬-prefixed bubble with the summary', () => {
   assert.deepEqual(out.status, ['done'])
 })
 
+test('sprite backends can use the status reaction without a second motion switch', () => {
+  const out = { says: [], status: [], motions: [] }
+  reactToEvent({ type: 'task_done', source: 'local', text: '完成' }, {
+    say: text => out.says.push(text),
+    onStatus: status => out.status.push(status),
+    playMotion: motion => out.motions.push(motion),
+  }, { motions: false })
+
+  assert.deepEqual(out.status, ['done'])
+  assert.deepEqual(out.motions, [])
+})
+
 test('a newly started task uses the thinking state before work begins', () => {
   const out = collect({ type: 'task_started', source: 'local', text: '' })
   assert.deepEqual(out.status, ['thinking'])

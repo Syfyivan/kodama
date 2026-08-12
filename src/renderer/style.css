@@ -102,31 +102,31 @@ body[data-pet-skin="peach"] {
   rotate: 0deg;
   scale: 1;
   backface-visibility: hidden;
-  will-change: transform;
+  will-change: auto;
 }
 
 #pet-gif[data-state="idle"] {
-  animation: kodama-idle 4.8s ease-in-out infinite;
+  animation: none;
 }
 
 #pet-gif[data-state="working"] {
-  animation: kodama-working 1.12s ease-in-out infinite;
+  animation: kodama-working 1.12s ease-in-out 2 both;
 }
 
 #pet-gif[data-state="thinking"] {
-  animation: kodama-thinking 2.8s ease-in-out infinite;
+  animation: kodama-thinking 2.8s ease-in-out 1 both;
 }
 
 #pet-gif[data-state="looking"] {
-  animation: kodama-looking 3s ease-in-out infinite;
+  animation: kodama-looking 3s ease-in-out 1 both;
 }
 
 #pet-gif[data-state="replying"] {
-  animation: kodama-replying 1.55s ease-in-out infinite;
+  animation: kodama-replying 1.55s ease-in-out 2 both;
 }
 
 #pet-gif[data-state="waiting"] {
-  animation: kodama-waiting 2.7s ease-in-out infinite;
+  animation: kodama-waiting 2.7s ease-in-out 1 both;
 }
 
 #pet-gif[data-state="eating"] {
@@ -183,10 +183,6 @@ body[data-pet-skin="peach"] {
   will-change: auto;
 }
 
-body[data-companion-active="true"] #pet-gif[data-state="idle"] {
-  animation-duration: 6.8s;
-}
-
 body.move-mode #pet-gif {
   animation-play-state: paused;
 }
@@ -198,13 +194,6 @@ body[data-performance-mode="saver"] .spirit-aura,
 body[data-performance-mode="saver"] .spirit-wing,
 body[data-performance-mode="saver"] .spirit-spark {
   animation-play-state: paused !important;
-}
-
-/* Keep legacy static-pack motion proportional even at the compact 12% size. */
-@keyframes kodama-idle {
-  0%, 100% { translate: 0 0; scale: 1; }
-  45% { translate: 0 -2.6%; scale: 1.012 .992; }
-  58% { translate: 0 -2.9%; scale: 1.015 .989; }
 }
 
 @keyframes kodama-working {
