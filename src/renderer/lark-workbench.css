@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Helvetica Neue", sans-serif;
   background: #f3f5f8;
   color: #1f2937;
 }
@@ -255,8 +255,11 @@ button:hover:not(:disabled) {
 }
 
 .empty-state {
-  color: #8b96a7;
+  max-width: 360px;
+  padding: 32px;
+  color: #68788c;
   text-align: center;
+  line-height: 1.7;
 }
 
 .empty-state strong {
@@ -1322,13 +1325,13 @@ body {
 }
 
 body {
-  min-width: 800px;
-  min-height: 620px;
+  min-width: 360px;
+  min-height: 0;
 }
 
 .workbench-app {
   display: grid;
-  grid-template-rows: 88px 50px minmax(0, 1fr);
+  grid-template-rows: 100px 58px minmax(0, 1fr);
   width: 100%;
   height: 100vh;
 }
@@ -1336,7 +1339,8 @@ body {
 .workbench-header {
   align-items: center;
   min-height: 0;
-  padding: 16px 22px;
+  padding: 20px 28px;
+  background: #fcfdfb;
 }
 
 .workbench-brand {
@@ -1347,13 +1351,13 @@ body {
 
 .brand-mark {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   place-items: center;
-  border: 1px solid #dce5f2;
+  border: 1px solid #dce8d8;
   border-radius: 14px;
-  background: linear-gradient(145deg, #fff, #edf4ff);
-  box-shadow: 0 7px 18px rgba(43, 68, 111, 0.09);
+  background: #edf4e8;
+  box-shadow: 0 4px 12px rgba(43, 68, 45, 0.04);
   font-size: 23px;
 }
 
@@ -1377,22 +1381,24 @@ body {
 .workbench-tabs {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   overflow-x: auto;
-  padding: 7px 14px;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  padding: 9px 28px;
   border-bottom: 1px solid #dfe5ed;
-  background: rgba(249, 251, 253, 0.98);
+  background: #fcfdfb;
 }
 
 .workbench-tabs button {
   flex: 0 0 auto;
-  min-height: 34px;
+  min-height: 38px;
   padding: 0 14px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
   color: #65748a;
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 750;
 }
 
@@ -1401,10 +1407,10 @@ body {
 }
 
 .workbench-tabs button.active {
-  border-color: #c9d8f3;
-  background: #fff;
-  color: #315bd6;
-  box-shadow: 0 4px 13px rgba(42, 70, 121, 0.08);
+  border-color: #243b35;
+  background: #243b35;
+  color: #fff;
+  box-shadow: 0 3px 8px rgba(36, 59, 53, 0.12);
 }
 
 .workbench-pages,
@@ -1415,6 +1421,8 @@ body {
 
 .workbench-pages {
   position: relative;
+  padding: 18px;
+  background: #f0f3f1;
 }
 
 .workspace-page {
@@ -1422,6 +1430,9 @@ body {
   height: 100%;
   overflow: hidden;
   background: #f6f8fb;
+  border: 1px solid #dfe6e1;
+  border-radius: 16px;
+  box-shadow: 0 4px 18px rgba(35, 51, 43, 0.03);
 }
 
 .workspace-page[hidden] {
@@ -1430,7 +1441,7 @@ body {
 
 .messages-page {
   display: grid;
-  grid-template-rows: 54px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .page-toolbar,
@@ -1446,7 +1457,7 @@ body {
 
 .page-toolbar > div:first-child {
   display: grid;
-  gap: 2px;
+  gap: 5px;
 }
 
 .page-toolbar > div:first-child strong {
@@ -1455,8 +1466,8 @@ body {
 }
 
 .page-toolbar > div:first-child span {
-  color: #8793a4;
-  font-size: 10.5px;
+  color: #68788c;
+  font-size: 12px;
 }
 
 .page-toolbar-actions,
@@ -2380,4 +2391,30 @@ body {
   .settings-card-wide {
     grid-column: auto;
   }
+}
+
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 2px solid #477363;
+  outline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .workbench-app { grid-template-rows: 88px 56px minmax(0, 1fr); }
+  .workbench-header { padding: 14px 16px; }
+  .workbench-tabs { padding-inline: 12px; }
+  .workbench-pages { padding: 8px; }
+  .workbench-shell, .bridge-task-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(140px, 38%) minmax(0, 1fr);
+  }
+  .message-sidebar { border-right: 0; border-bottom: 1px solid #e1e6ee; }
+  .message-detail { padding: 20px 16px; }
+  .page-toolbar, .workspace-page-head { flex-wrap: wrap; gap: 12px; padding: 14px; }
+  .page-toolbar-actions, .workspace-page-actions { flex-wrap: wrap; }
+  .bridge-summary-grid { gap: 4px; }
+  .empty-state { padding: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
