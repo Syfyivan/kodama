@@ -171,7 +171,12 @@ test('base sink keeps a failed record queued for retry', async t => {
     sink.stop()
     rmSync(dir, { recursive: true, force: true })
   })
-  sink.ingest([{ messageId: 'om_retry', content: 'retry me' }])
+  sink.ingest([{
+    messageId: 'om_retry',
+    content: 'retry me',
+    createdAt: '2026-07-07T05:07:00.000Z',
+    archivedAt: '2026-07-07T05:08:00.000Z',
+  }])
   const first = await sink.flush()
   assert.equal(first.ok, false)
   assert.equal(first.error, 'temporary failure')
