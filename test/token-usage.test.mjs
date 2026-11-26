@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -42,6 +42,29 @@ test('claude JSONL usage aggregates by day (input+output+cache)', () => {
   const byDay = usageByDay({ claudeRoot, codexRoot: '/nonexistent' })
   assert.equal(byDay['2026-06-15'], 100 + 50 + 10 + 5 + 35) // 200
   assert.equal(byDay['2026-06-14'], 200)
+})
+
+test('reads long UTF-8 JSONL records across chunks and accepts the final line without a newline', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'kodama-chunked-usage-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const record = {
+    timestamp: '2026-06-15T01:00:00Z',
+    message: { id: '茶', usage: { input_tokens: 100 } },
+  }
+  const prefix = '{"padding":"'
+  const usage = JSON.stringify(record)
+  const bytesBeforeId = Buffer.byteLength(prefix + '",' + usage.slice(1, usage.indexOf('茶')))
+  const padding = 'a'.repeat(64 * 1024 - bytesBeforeId - 1)
+  const longLine = prefix + padding + '",' + usage.slice(1)
+  writeFileSync(join(root, 'session.jsonl'), [longLine, '', '{partial', usage, JSON.stringify({
+    timestamp: '2026-06-16T01:00:00Z',
+    message: { usage: { output_tokens: 25 } },
+  })].join('\r\n'))
+
+  assert.deepEqual(usageByDay({ claudeRoot: root, codexRoot: join(root, 'unused') }), {
+    '2026-06-15': 100,
+    '2026-06-16': 25,
+  })
 })
 
 test('summarize computes today/last7/total', () => {

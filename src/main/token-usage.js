@@ -10,6 +10,7 @@
 const fs = require('fs')
 const path = require('path')
 const os = require('os')
+const { StringDecoder } = require('node:string_decoder')
 const { costFor } = require('./pricing')
 
 const MIB = 1024 * 1024
@@ -56,19 +57,48 @@ function selectJsonlWithinBudget(files, maxFileBytes, scanBudgetBytes) {
 }
 
 function eachLine(file, fn) {
-  let text
-  try {
-    text = fs.readFileSync(file, 'utf8')
-  } catch {
-    return
-  }
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
+  const parseLine = (line) => {
+    if (!line.trim()) return
     try {
       fn(JSON.parse(line))
     } catch {
       /* skip malformed line */
     }
+  }
+  let fd
+  try {
+    fd = fs.openSync(file.path, 'r')
+    const buffer = Buffer.allocUnsafe(64 * 1024)
+    const decoder = new StringDecoder('utf8')
+    let remaining = file.size
+    const fragments = []
+    while (remaining > 0) {
+      const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, remaining))
+      if (count === 0) break
+      remaining -= count
+      const text = decoder.write(buffer.subarray(0, count))
+      let start = 0
+      let end = text.indexOf('\n')
+      while (end !== -1) {
+        const line = text.slice(start, end)
+        if (fragments.length) {
+          fragments.push(line)
+          parseLine(fragments.join(''))
+          fragments.length = 0
+        } else {
+          parseLine(line)
+        }
+        start = end + 1
+        end = text.indexOf('\n', start)
+      }
+      if (start < text.length) fragments.push(text.slice(start))
+    }
+    fragments.push(decoder.end())
+    parseLine(fragments.join(''))
+  } catch {
+    /* a log may disappear or become unreadable during the scan */
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
   }
 }
 
@@ -211,8 +241,8 @@ function usageAndCostByDay({ claudeRoot, codexRoot, maxFileBytes, scanBudgetByte
     ...listJsonl(xRoot).map((file) => ({ ...file, source: 'codex' })),
   ]
   for (const file of selectJsonlWithinBudget(candidates, perFileLimit, totalBudget)) {
-    if (file.source === 'claude') addClaude(byDay, file.path, seen, costByDay)
-    else addCodex(byDay, file.path, costByDay)
+    if (file.source === 'claude') addClaude(byDay, file, seen, costByDay)
+    else addCodex(byDay, file, costByDay)
   }
   return { byDay, costByDay }
 }
