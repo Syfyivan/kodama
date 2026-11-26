@@ -15,3 +15,11 @@ test('returns a finite total only after token history is ready', () => {
   assert.equal(tokenTotalWhenReady({ ready: true, total: -1 }), null)
   assert.equal(tokenTotalWhenReady({ ready: true, total: 'bad' }), null)
 })
+
+test('missing totals do not start a growth baseline at zero', () => {
+  for (const total of [null, undefined, '', '  ', false, []]) {
+    assert.equal(tokenTotalWhenReady({ ready: true, total }), null)
+  }
+  assert.equal(tokenTotalWhenReady({ ready: true, total: 0 }), 0)
+  assert.equal(tokenTotalWhenReady({ ready: true, total: '42' }), 42)
+})
