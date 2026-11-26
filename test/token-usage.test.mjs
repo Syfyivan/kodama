@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -7,6 +8,20 @@ import { test } from 'node:test'
 
 const require = createRequire(import.meta.url)
 const { usageByDay, summarize, summarizeByDay } = require('../src/main/token-usage.js')
+
+test('seven-day UTC token totals do not repeat a date across a DST change', () => {
+  const script = `
+    const { summarizeByDay } = require('./src/main/token-usage.js')
+    const days = { '2026-03-09': 90, '2026-03-08': 80, '2026-03-02': 200 }
+    console.log(JSON.stringify(summarizeByDay(days, new Date('2026-03-09T23:30:00Z'))))
+  `
+  const output = execFileSync(process.execPath, ['-e', script], {
+    cwd: new URL('../', import.meta.url),
+    env: { ...process.env, TZ: 'America/Los_Angeles' },
+    encoding: 'utf8',
+  })
+  assert.deepEqual(JSON.parse(output), { today: 90, last7: 170, total: 370 })
+})
 
 function writeClaudeFixture() {
   const root = mkdtempSync(join(tmpdir(), 'kodama-claude-'))
