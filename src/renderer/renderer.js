@@ -4,7 +4,7 @@ import { reactToEvent } from './reactions.js'
 import { PET_CONFIG } from './config/pet-config.js'
 import { initAccessoryLayer } from './accessories.js'
 import { welcomeCopyForGrowth } from './onboarding.js'
-import { tokenTotalWhenReady } from './token-feed.js'
+import { createTokenRefresher, tokenTotalWhenReady } from './token-feed.js'
 import { scaledHitboxSize } from './pet-hitbox.js'
 import {
   areasToWindowRects,
@@ -1753,22 +1753,11 @@ function fmtTokens(n) {
   return String(n)
 }
 
-async function refreshTokens() {
-  try {
-    const s = await window.pet.tokenStats?.()
-    if (s) {
-      tokenStats = s
-      const total = tokenTotalWhenReady(s)
-      if (total == null) {
-        setTimeout(refreshTokens, 10000)
-        return
-      }
-      feedTokens(total)
-    }
-  } catch (_) {
-    /* main not ready */
-  }
-}
+const refreshTokens = createTokenRefresher({
+  read: () => window.pet.tokenStats?.(),
+  onStats: stats => { tokenStats = stats },
+  onTotal: feedTokens,
+})
 
 // ---------- bubble ----------
 function visibleRectFor(el, fallbackWidth = 240, fallbackHeight = 64) {
