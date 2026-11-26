@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -150,55 +150,36 @@ test('base sink resets legacy dedupe state when setup binds a replacement Base',
   sink.stop()
 })
 
-test('base sink keeps a failed record queued for retry', async () => {
+test('base sink keeps a failed record queued for retry', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'kodama-lark-base-'))
-  const marker = join(dir, 'count.txt')
-  const fakeCli = join(dir, 'fake-lark-cli.mjs')
-  writeFileSync(fakeCli, [
-    '#!/usr/bin/env node',
-    "import { existsSync, readFileSync, writeFileSync } from 'node:fs'",
-    'const marker = process.env.FAKE_LARK_COUNT_FILE',
-    "const count = existsSync(marker) ? Number(readFileSync(marker, 'utf8')) : 0",
-    'if (!count) {',
-    "  writeFileSync(marker, '1')",
-    "  console.error(JSON.stringify({ ok: false, error: { message: 'temporary failure' } }))",
-    '  process.exit(1)',
-    '}',
-    "console.log(JSON.stringify({ data: { record: { record_id: 'rec_1' } } }))",
-    '',
-  ].join('\n'))
-  chmodSync(fakeCli, 0o755)
-  const previous = process.env.FAKE_LARK_COUNT_FILE
-  process.env.FAKE_LARK_COUNT_FILE = marker
-  try {
-    const sink = createLarkBaseSink({
-      enabled: true,
-      baseToken: 'base_1',
-      tableId: 'tbl_1',
-      stateFile: join(dir, 'state.json'),
-      larkCliBin: fakeCli,
-      flushIntervalMs: 60 * 1000,
-      minWriteIntervalMs: 0,
-    })
-    sink.ingest([{
-      messageId: 'om_retry',
-      chatName: '工程群',
-      senderName: '一凡',
-      msgType: 'text',
-      content: 'retry me',
-      source: 'web-push',
-      createdAt: '2026-07-07T05:07:00.000Z',
-      archivedAt: '2026-07-07T05:08:00.000Z',
-    }])
-    const first = await sink.flush()
-    assert.equal(first.ok, false)
-    assert.equal(first.queueLength, 1)
-    const second = await sink.flush()
-    assert.equal(second.ok, true)
-    assert.equal(second.queueLength, 0)
-    assert.equal(second.syncedCount, 1)
-  } finally {
-    if (previous === undefined) delete process.env.FAKE_LARK_COUNT_FILE
-    else process.env.FAKE_LARK_COUNT_FILE = previous
-  }
+  const writes = []
+  const sink = createLarkBaseSink({
+    enabled: true,
+    baseToken: 'base_1',
+    tableId: 'tbl_1',
+    stateFile: join(dir, 'state.json'),
+    flushIntervalMs: 60 * 1000,
+    minWriteIntervalMs: 0,
+  }, {
+    async runCommand(_, args) {
+      writes.push(args)
+      if (writes.length === 1) throw new Error('temporary failure')
+      return { data: { record: { record_id: 'rec_1' } } }
+    },
+  })
+  t.after(() => {
+    sink.stop()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  sink.ingest([{ messageId: 'om_retry', content: 'retry me' }])
+  const first = await sink.flush()
+  assert.equal(first.ok, false)
+  assert.equal(first.error, 'temporary failure')
+  assert.equal(first.queueLength, 1)
+  const second = await sink.flush()
+  assert.equal(second.ok, true)
+  assert.equal(second.queueLength, 0)
+  assert.equal(second.syncedCount, 1)
+  assert.equal(writes.length, 2)
+  assert.deepEqual(writes[0], writes[1])
 })

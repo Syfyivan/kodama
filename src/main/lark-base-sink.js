@@ -161,7 +161,7 @@ function runJson(command, args, { timeout = DEFAULT_BASE_SINK_OPTIONS.commandTim
   })
 }
 
-function createLarkBaseSink(input = {}) {
+function createLarkBaseSink(input = {}, { runCommand = runJson } = {}) {
   const options = readBaseSinkOptions(input)
   let state = readState(options.stateFile || '')
   const targetId = baseSinkTargetId(options)
@@ -204,7 +204,7 @@ function createLarkBaseSink(input = {}) {
     const waitMs = options.minWriteIntervalMs - (Date.now() - lastWriteStartedAt)
     if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs))
     lastWriteStartedAt = Date.now()
-    const result = await runJson(options.larkCliBin, [
+    const result = await runCommand(options.larkCliBin, [
       'base',
       '+record-upsert',
       '--as',
