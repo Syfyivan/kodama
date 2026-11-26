@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 
 import {
@@ -37,7 +38,8 @@ test('resolver reloads Codex session titles when the index changes', () => {
 })
 
 test('default index path points at the Codex session index', () => {
-  assert.equal(defaultIndexPath('/Users/bytedance'), '/Users/bytedance/.codex/session_index.jsonl')
+  const home = resolve('fixture-home')
+  assert.equal(defaultIndexPath(home), join(home, '.codex', 'session_index.jsonl'))
 })
 
 test('recognizes durable Codex Desktop identity from transcript session metadata', () => {
