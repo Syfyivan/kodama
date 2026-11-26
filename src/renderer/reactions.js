@@ -56,8 +56,9 @@ function playCue(type) {
   const now = Date.now()
   if (now - lastSoundAt < 900) return
   lastSoundAt = now
+  let ctx
   try {
-    const ctx = new AudioContext()
+    ctx = new AudioContext()
     const osc = ctx.createOscillator()
     const gain = ctx.createGain()
     const frequency = {
@@ -78,7 +79,7 @@ function playCue(type) {
     osc.stop(ctx.currentTime + 0.2)
     osc.addEventListener('ended', () => ctx.close().catch(() => {}), { once: true })
   } catch {
-    /* audio is best-effort */
+    ctx?.close().catch(() => {})
   }
 }
 

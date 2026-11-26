@@ -124,6 +124,19 @@ test('unknown event type is ignored', () => {
   assert.equal(out.status.length, 0)
 })
 
+test('a failed audio cue closes its context and still shows the reaction', t => {
+  let closed = 0
+  class AudioContext {
+    createOscillator() { throw new Error('audio unavailable') }
+    async close() { closed++ }
+  }
+  globalThis.window = { AudioContext }
+  t.after(() => { delete globalThis.window })
+  const out = collect({ type: 'task_done', source: 'local', text: '完成' })
+  assert.equal(closed, 1)
+  assert.match(out.says[0], /完成/)
+})
+
 test('every configured event has a bubble template', () => {
   for (const [type, def] of Object.entries(PET_CONFIG.events)) {
     if (def.silent) {
